@@ -28,6 +28,9 @@ type MarketState =
 type InvalidationChoice = "micro_m5" | "shift_m15" | "ifvg";
 type JournalAccuracy = "accurate" | "partial" | "wrong";
 
+type SetupTag = "A" | "B" | "unknown";
+type TargetTag = Level | "HTF" | "NONE";
+
 type JournalEntry = {
   id: string;
   createdAt: number;
@@ -45,10 +48,20 @@ type JournalEntry = {
   invalidationChoice: InvalidationChoice | null;
   suggestedTargets: Level[];
 
+  // ✅ NUEVO: resultado real
+  tradeTaken: "yes" | "no";
+  rr: number | null;          // si no tomaste trade -> null
+  setupTag: SetupTag;         // A / B / unknown
+  targetTag: TargetTag;       // Level / HTF / NONE
+
   helped: boolean;
   accuracy: JournalAccuracy;
   note: string;
 };
+
+// ✅ LS keys separadas (journal + draft de UI)
+const LS_JOURNAL_KEY = "pm_scalps_journal_v0";
+const LS_DRAFT_KEY = "pm_scalps_draft_v0";
 
 const LS_KEY = "pm_scalps_journal_v0";
 
@@ -98,6 +111,12 @@ function suggestTargets(pending: Level[], bias: "LONG" | "SHORT" | "WAIT" | "NO 
   return candidates.slice(0, 2);
 }
 
+function pendingBySide(pending: Level[]) {
+  const buyside = pending.filter((l) => levelSide(l) === "buyside");
+  const sellside = pending.filter((l) => levelSide(l) === "sellside");
+  return { buyside, sellside };
+}
+
 function inferBias(lastTaken: Level | null, reaction: Reaction) {
   if (!lastTaken || reaction === "unclear") {
     return { bias: "WAIT" as const, reason: "Falta claridad post-toma. Seguí como espectador." };
@@ -124,8 +143,9 @@ function inferMarketState(args: {
   pendingLevels: Level[];
   invalidationHappened: "yes" | "no" | "unknown";
   invalidationChoice: InvalidationChoice | null;
+  biasShown: "LONG" | "SHORT" | "WAIT" | "NO TRADE";
 }) {
-  const { liqTaken, reaction, pendingLevels, invalidationHappened, invalidationChoice } = args;
+  const { liqTaken, reaction, pendingLevels, invalidationHappened, invalidationChoice, biasShown } = args;
 
   if (invalidationHappened === "yes") {
     if (invalidationChoice === "ifvg") {
@@ -174,28 +194,44 @@ function inferMarketState(args: {
   }
 
   if (liqTaken === "yes") {
-    if (reaction === "accept" && pendingLevels.length === 0) {
-      return {
-        state: "EXPANSION" as const,
-        tone: "good" as const,
-        desc: "Aceptación limpia (sin pendientes fuertes). Mayor chance de continuación.",
-      };
-    }
-    if (reaction === "accept" && pendingLevels.length > 0) {
-      return {
-        state: "DELIVERY_CONDITIONAL" as const,
-        tone: "warn" as const,
-        desc: "Aceptación condicional: hay pendientes. Vigilá CHoCH M15 / iFVG antes de apretar.",
-      };
-    }
-    if (reaction === "absorb") {
-      return {
-        state: "TRANSITION" as const,
-        tone: "danger" as const,
-        desc: "Absorción post-toma: reversal probable, pero operable SOLO con shift + PD Array.",
-      };
-    }
-  }
+        const { buyside, sellside } = pendingBySide(pendingLevels);
+
+        if (reaction === "accept") {
+          if (pendingLevels.length === 0) {
+            return {
+              state: "EXPANSION" as const,
+              tone: "good" as const,
+              desc: "Aceptación limpia (sin pendientes fuertes). Mayor chance de continuación.",
+            };
+          }
+
+          const hasOppositePending =
+            (biasShown === "LONG" && sellside.length > 0) ||
+            (biasShown === "SHORT" && buyside.length > 0);
+
+          if (hasOppositePending) {
+            return {
+              state: "DELIVERY_CONDITIONAL" as const,
+              tone: "warn" as const,
+              desc: "Aceptación, pero hay liquidez pendiente CONTRARIA al sesgo. Delivery condicional: vigilá invalidaciones.",
+            };
+          }
+
+          return {
+            state: "EXPANSION" as const,
+            tone: "good" as const,
+            desc: "Aceptación + liquidez pendiente ALINEADA: eso es fuel/targets. Seguí el plan.",
+          };
+        }
+
+        if (reaction === "absorb") {
+          return {
+            state: "TRANSITION" as const,
+            tone: "danger" as const,
+            desc: "Absorción post-toma: reversal probable, pero operable SOLO con shift + PD Array.",
+          };
+        }
+      }
 
   return {
     state: "WAIT" as const,
@@ -283,23 +319,79 @@ export default function Page() {
   const [showInvalidations, setShowInvalidations] = useState(false);
   const [invalidationHappened, setInvalidationHappened] = useState<"yes" | "no" | "unknown">("unknown");
   const [invalidationChoice, setInvalidationChoice] = useState<InvalidationChoice | null>(null);
+  const [liquidezPendienteVisible, setLiquidezPendienteVisible] = useState(false)
 
   const [helped, setHelped] = useState<boolean | null>(null);
   const [accuracy, setAccuracy] = useState<JournalAccuracy>("accurate");
   const [note, setNote] = useState("");
   const [journal, setJournal] = useState<JournalEntry[]>([]);
+    // ✅ NUEVO: journal PRO
+  const [tradeTaken, setTradeTaken] = useState<"yes" | "no">("no");
+  const [rr, setRr] = useState<string>("");
+  const [setupTag, setSetupTag] = useState<SetupTag>("unknown");
+  const [targetTag, setTargetTag] = useState<TargetTag>("NONE");
 
-  useEffect(() => {
+    useEffect(() => {
+    // 1) Draft UI (flow)
     try {
-      const raw = localStorage.getItem(LS_KEY);
+      const rawDraft = localStorage.getItem(LS_DRAFT_KEY);
+      if (rawDraft) {
+        const d = JSON.parse(rawDraft);
+
+        if (d.step) setStep(d.step);
+        if (d.liqTaken) setLiqTaken(d.liqTaken);
+        if (Array.isArray(d.takenLevels)) setTakenLevels(d.takenLevels);
+        if (d.lastTaken !== undefined) setLastTaken(d.lastTaken);
+        if (d.reaction) setReaction(d.reaction);
+        if (d.hasFvg) setHasFvg(d.hasFvg);
+        if (Array.isArray(d.pendingLevels)) setPendingLevels(d.pendingLevels);
+
+        if (typeof d.showInvalidations === "boolean") setShowInvalidations(d.showInvalidations);
+        if (d.invalidationHappened) setInvalidationHappened(d.invalidationHappened);
+        if (d.invalidationChoice !== undefined) setInvalidationChoice(d.invalidationChoice);
+      }
+    } catch {}
+
+    // 2) Journal entries
+    try {
+      const raw = localStorage.getItem(LS_JOURNAL_KEY);
       if (raw) setJournal(JSON.parse(raw) as JournalEntry[]);
     } catch {}
   }, []);
 
-  function persistJournal(next: JournalEntry[]) {
+    useEffect(() => {
+    try {
+      const draft = {
+        step,
+        liqTaken,
+        takenLevels,
+        lastTaken,
+        reaction,
+        hasFvg,
+        pendingLevels,
+        showInvalidations,
+        invalidationHappened,
+        invalidationChoice,
+      };
+      localStorage.setItem(LS_DRAFT_KEY, JSON.stringify(draft));
+    } catch {}
+  }, [
+    step,
+    liqTaken,
+    takenLevels,
+    lastTaken,
+    reaction,
+    hasFvg,
+    pendingLevels,
+    showInvalidations,
+    invalidationHappened,
+    invalidationChoice,
+  ]);
+
+    function persistJournal(next: JournalEntry[]) {
     setJournal(next);
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify(next));
+      localStorage.setItem(LS_JOURNAL_KEY, JSON.stringify(next));
     } catch {}
   }
 
@@ -326,24 +418,28 @@ export default function Page() {
       : bias.reason;
 
   const marketState = useMemo(() => {
-    return inferMarketState({
-      liqTaken,
-      reaction,
-      pendingLevels,
-      invalidationHappened,
-      invalidationChoice,
-    });
-  }, [liqTaken, reaction, pendingLevels, invalidationHappened, invalidationChoice]);
+  return inferMarketState({
+    liqTaken,
+    reaction,
+    pendingLevels,
+    invalidationHappened,
+    invalidationChoice,
+    biasShown,
+  });
+}, [liqTaken, reaction, pendingLevels, invalidationHappened, invalidationChoice, biasShown]);
 
   const inval = useMemo(() => {
     if (!invalidationChoice) return null;
     return invalidationInfo(invalidationChoice, biasShown);
   }, [invalidationChoice, biasShown]);
 
-  const suggestedTargets = useMemo(() => {
-    if (invalidationChoice !== "ifvg") return [];
+  const suggestedTargets = useMemo((): Level[] => {
+    // Solo damos targets si hay sesgo operable
+    if (biasShown !== "LONG" && biasShown !== "SHORT") return [];
+
+    // Si hay aceptación con pending ALINEADA o hay iFVG, igual queremos targets
     return suggestTargets(pendingLevels, biasShown);
-  }, [invalidationChoice, pendingLevels, biasShown]);
+  }, [pendingLevels, biasShown]);
 
   const deliveryStatus = useMemo(() => {
     if (liqTaken !== "yes") return null;
@@ -352,39 +448,59 @@ export default function Page() {
     const took = `${levelLabel(lastTaken)} (${formatSide(levelSide(lastTaken))})`;
     const hasPending = pendingLevels.length > 0;
 
-    if (reaction === "accept" && hasPending) {
-      return {
-        title: "Aceptación CONDICIONAL",
-        tone: "warn" as const,
-        body: [
-          `Hay aceptación post-toma (${took}), pero queda liquidez pendiente.`,
-          "Esto suele generar 'delivery incompleto': puede continuar… o puede invalidarse fuerte.",
-          "Resultado: no te cases. Vigilá invalidaciones (CHoCH M15 / iFVG).",
-        ],
-      };
+    const { buyside, sellside } = pendingBySide(pendingLevels);
+    const hasOppositePending =
+      (biasShown === "LONG" && sellside.length > 0) ||
+      (biasShown === "SHORT" && buyside.length > 0);
+
+    if (reaction === "accept" && hasOppositePending) {
+            return {
+                title: "Aceptación CONDICIONAL",
+                tone: "warn" as const,
+                showTargets: false as const,
+                body: [
+                  `Hay aceptación post-toma (${took}), pero queda liquidez pendiente CONTRARIA al sesgo.`,
+                  "Eso suele generar delivery incompleto: puede continuar… o invalidarse fuerte.",
+                  "Resultado: no te cases. Vigilá invalidaciones (CHoCH M15 / iFVG).",
+                ],
+              };
+    }
+
+    if (reaction === "accept" && !hasOppositePending) {
+            return {
+                title: "Aceptación + targets",
+                tone: "good" as const,
+                showTargets: true as const,
+                body: [
+                  `Aceptación post-toma (${took}) y lo pendiente está ALINEADO al sesgo.`,
+                  "Eso es fuel/targets, no peligro. Buscá el target lógico más cercano.",
+                ],
+              };
     }
 
     if (reaction === "accept" && !hasPending) {
-      return {
-        title: "Aceptación (más limpia)",
-        tone: "good" as const,
-        body: [
-          `Aceptación post-toma (${took}) y no marcaste pendientes fuertes.`,
-          "Más chance de continuación. Igual: si muere el PD Array que sostiene, se cancela.",
-        ],
-      };
+            return {
+              title: "Aceptación (más limpia)",
+              tone: "good" as const,
+              showTargets: false as const,
+              body: [
+                `Aceptación post-toma (${took}) y no marcaste pendientes fuertes.`,
+                "Más chance de continuación. Igual: si muere el PD Array que sostiene, se cancela.",
+              ],
+            };
     }
 
     if (reaction === "absorb") {
-      return {
-        title: "Absorción (reversal probable)",
-        tone: "danger" as const,
-        body: [
-          `Absorción post-toma (${took}).`,
-          "La toma fue 'cebo': el mercado succionó liquidez y cambió el delivery.",
-          "Ahora solo operás si ves shift confirmable (M15 + PD Array).",
-        ],
-      };
+            return {
+              title: "Absorción (reversal probable)",
+              tone: "danger" as const,
+              showTargets: false as const,
+              body: [
+                `Absorción post-toma (${took}).`,
+                "La toma fue 'cebo': el mercado succionó liquidez y cambió el delivery.",
+                "Ahora solo operás si ves shift confirmable (M15 + PD Array).",
+              ],
+            };
     }
 
     return null;
@@ -392,6 +508,14 @@ export default function Page() {
 
   function toggleLevel(arr: Level[], setArr: (next: Level[]) => void, l: Level) {
     setArr(arr.includes(l) ? arr.filter((x) => x !== l) : [...arr, l]);
+  }
+
+  function showLiquidezPendiente() {
+    if (liquidezPendienteVisible) {
+      setLiquidezPendienteVisible(false)
+    } else {
+      setLiquidezPendienteVisible(true)
+    };
   }
 
   function resetAll() {
@@ -407,38 +531,56 @@ export default function Page() {
     setInvalidationChoice(null);
   }
 
-  function saveJournalEntry() {
-    if (helped === null) return;
+    function saveJournalEntry() {
+        if (helped === null) return;
 
-    const entry: JournalEntry = {
-      id: crypto.randomUUID(),
-      createdAt: Date.now(),
+        const rrValue =
+          tradeTaken === "yes" && rr.trim() !== "" && Number.isFinite(Number(rr))
+            ? Number(rr)
+            : null;
 
-      liqTaken,
-      takenLevels,
-      lastTaken,
-      reaction,
-      pendingLevels,
-      hasFvg,
+        const entry: JournalEntry = {
+          id: crypto.randomUUID(),
+          createdAt: Date.now(),
 
-      biasShown,
-      marketState: marketState.state,
-      invalidationHappened,
-      invalidationChoice,
-      suggestedTargets,
+          liqTaken,
+          takenLevels,
+          lastTaken,
+          reaction,
+          pendingLevels,
+          hasFvg,
 
-      helped,
-      accuracy,
-      note: note.trim(),
-    };
+          biasShown,
+          marketState: marketState.state,
+          invalidationHappened,
+          invalidationChoice,
+          suggestedTargets,
 
-    const next = [entry, ...journal].slice(0, 200);
-    persistJournal(next);
+          // ✅ NUEVO
+          tradeTaken,
+          rr: rrValue,
+          setupTag: tradeTaken === "yes" ? setupTag : "unknown",
+          targetTag: tradeTaken === "yes" ? targetTag : "NONE",
 
-    setHelped(null);
-    setAccuracy("accurate");
-    setNote("");
-  }
+          helped,
+          accuracy,
+          note: note.trim(),
+        };
+
+        const next = [entry, ...journal].slice(0, 200);
+        persistJournal(next);
+
+        setHelped(null);
+        setAccuracy("accurate");
+        setNote("");
+
+        // ✅ reset de inputs del journal pro
+        setTradeTaken("no");
+        setRr("");
+        setSetupTag("unknown");
+        setTargetTag("NONE");
+      }
+
 
   function exportJournalJson() {
     const blob = new Blob([JSON.stringify(journal, null, 2)], { type: "application/json" });
@@ -507,22 +649,42 @@ export default function Page() {
           )}
 
           {deliveryStatus && (
-            <div className={`mt-4 rounded-2xl border p-3 ${toneToClasses(deliveryStatus.tone)}`}>
-              <div className="font-extrabold">Estado del delivery: {deliveryStatus.title}</div>
-              <div className="mt-2 grid gap-1 text-sm text-white/85">
-                {deliveryStatus.body.map((line, i) => (
-                  <div key={i}>• {line}</div>
-                ))}
+              <div className={`mt-4 rounded-2xl border p-3 ${toneToClasses(deliveryStatus.tone)}`}>
+                <div className="font-extrabold">Estado del delivery: {deliveryStatus.title}</div>
+
+                <div className="mt-2 grid gap-1 text-sm text-white/85">
+                  {deliveryStatus.body.map((line, i) => (
+                    <div key={i}>• {line}</div>
+                  ))}
+                </div>
+
+        {deliveryStatus.showTargets && suggestedTargets.length > 0 && (
+              <div className="mt-3">
+                <div className="text-xs font-extrabold text-white/70">TARGETS SUGERIDOS</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {suggestedTargets.map((t) => (
+                    <div
+                      key={t}
+                      className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-extrabold"
+                      title="Se basa en tu liquidez pendiente marcada"
+                    >
+                      🎯 {levelLabel(t)}
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
+        )}
 
           {/* Pending Liquidity */}
           <div className="my-4 h-px bg-white/10" />
 
-          <div className="font-extrabold">Liquidez pendiente (manual)</div>
-          <div className="mt-1 text-sm text-white/65">
-            Marcá lo que sabés que está “resting” (esto hace condicional la aceptación).
+          <button className={btnPrimary} onClick={showLiquidezPendiente}>Liquidez pendiente</button>
+          { liquidezPendienteVisible && (
+            <>
+          <div className="mt-3 text-sm text-white/65">
+            Marcá la liquidez que esta "resting".
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">
@@ -543,6 +705,8 @@ export default function Page() {
               );
             })}
           </div>
+          
+          </>)}
 
           {/* Invalidations toggle */}
           <div className="mt-4 flex flex-wrap gap-2">
@@ -570,7 +734,7 @@ export default function Page() {
                   >
                     No
                   </button>
-                  <button onClick={() => setInvalidationHappened("yes")} className={btnDanger}>
+                  <button onClick={() => setInvalidationHappened("yes")} className={btn}>
                     Sí
                   </button>
                 </div>
@@ -983,6 +1147,67 @@ export default function Page() {
               <option value="partial">Parcial</option>
               <option value="wrong">No</option>
             </select>
+                      {/* ✅ NUEVO: Resultado real */}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <div className="text-xs font-extrabold text-white/70">¿TOMASTE TRADE?</div>
+
+                  <button
+                    onClick={() => setTradeTaken("yes")}
+                    className={tradeTaken === "yes" ? btnGood : btn}
+                  >
+                    Sí
+                  </button>
+                  <button
+                    onClick={() => setTradeTaken("no")}
+                    className={tradeTaken === "no" ? btnDanger : btn}
+                  >
+                    No
+                  </button>
+
+                  <input
+                    value={rr}
+                    onChange={(e) => setRr(e.target.value)}
+                    placeholder="RR (ej 2.5)"
+                    inputMode="decimal"
+                    className="h-11 w-28 rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none placeholder:text-white/40"
+                    disabled={tradeTaken !== "yes"}
+                  />
+
+                  <select
+                    value={setupTag}
+                    onChange={(e) => setSetupTag(e.target.value as SetupTag)}
+                    className="h-11 rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none"
+                    disabled={tradeTaken !== "yes"}
+                  >
+                    <option value="unknown">Setup?</option>
+                    <option value="A">A (2–3R / confluencia)</option>
+                    <option value="B">B (impulsivo / 1.5R)</option>
+                  </select>
+
+                  <select
+                    value={targetTag}
+                    onChange={(e) => setTargetTag(e.target.value as TargetTag)}
+                    className="h-11 rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none"
+                    disabled={tradeTaken !== "yes"}
+                  >
+                    <option value="NONE">Target?</option>
+                    <option value="HTF">HTF (Daily/Weekly)</option>
+
+                    {/* sugeridos dinámicos */}
+                    {suggestedTargets.map((t) => (
+                      <option key={t} value={t}>
+                        {levelLabel(t)}
+                      </option>
+                    ))}
+
+                    {/* fallback: todos los levels */}
+                    {levelsAll.map((l) => (
+                      <option key={l} value={l}>
+                        {levelLabel(l)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
           </div>
 
           <textarea
@@ -1018,6 +1243,11 @@ export default function Page() {
                   </div>
                   <div className="text-xs text-white/80">
                     <b>{j.marketState}</b> · {j.biasShown} · {j.accuracy} · {j.helped ? "ayudó" : "no ayudó"}
+                      {j.tradeTaken === "yes" && (
+                        <>
+                          {" "}· <b>TRADE</b> · RR {j.rr ?? "—"} · {j.setupTag !== "unknown" ? `Setup ${j.setupTag}` : "Setup —"} · Target {j.targetTag}
+                        </>
+                      )}
                   </div>
                 </div>
                 {j.note && <div className="mt-2 text-sm text-white/85">{j.note}</div>}
