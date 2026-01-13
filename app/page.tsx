@@ -152,14 +152,14 @@ function inferMarketState(args: {
       return {
         state: "REVERSAL_CONFIRMED" as const,
         tone: "good" as const,
-        desc: "Reversa operable: iFVG confirmada. Buscá retests + PD Array en zona lógica.",
+        desc: "Nuevo delivery confirmado y operativo. Operá SOLO en la nueva dirección (risky si perseguís).",
       };
     }
     if (invalidationChoice === "shift_m15") {
       return {
         state: "TRANSITION" as const,
         tone: "danger" as const,
-        desc: "Shift M15 + displacement: invalida fuerte, pero esperá retest (no persigas impulso).",
+        desc: "Cambio de delivery confirmado (M15 + displacement). Esperá retest a PD Array. No persigas precio.",
       };
     }
     if (invalidationChoice === "micro_m5") {
@@ -228,7 +228,7 @@ function inferMarketState(args: {
           return {
             state: "TRANSITION" as const,
             tone: "danger" as const,
-            desc: "Absorción post-toma: reversal probable, pero operable SOLO con shift + PD Array.",
+            desc: "Cambio de delivery detectado. Operable SOLO si hay retest a PD Array. No persigas precio.",
           };
         }
       }
@@ -409,13 +409,13 @@ export default function Page() {
       : bias.bias;
 
   const biasReason =
-    liqTaken === "no"
-      ? modeNoLiq === "EXPANSION"
-        ? "Sin sweep claro. No fuerces: esperá evento (sweep + displacement) o no operes."
-        : modeNoLiq === "RANGE"
-          ? "Chop/rango sin evento. Hoy te vas a lastimar si insistís."
-          : "Falta info para decidir."
-      : bias.reason;
+    biasShown === "LONG"
+      ? "Estructura activa M15–M5 ALCISTA. Operá pullbacks en PD Arrays alineados. No persigas precio."
+      : biasShown === "SHORT"
+        ? "Estructura activa M15–M5 BAJISTA. Buscá retests/pullbacks en PD Arrays. No persigas impulsos."
+        : biasShown === "WAIT"
+          ? "No hay estructura activa clara para operar. Esperá sweep/shift válido o PD Array limpio."
+          : "Contexto desordenado o rango. Mercado abierto, pero no operable.";
 
   const marketState = useMemo(() => {
   return inferMarketState({
@@ -620,7 +620,7 @@ export default function Page() {
         {/* Output */}
         <div className={panel}>
           <div className="flex flex-col items-start gap-3">
-            <div className="text-xs font-extrabold tracking-wide text-white/70">LECTURA DEL MERCADO / CONTEXTO</div>
+            <div className="text-xs font-extrabold tracking-wide text-white/70">DIRECCIÓN OPERABLE ACTUAL (M15–M5)</div>
             <div className={
               biasShown === "LONG" 
                 ? "text-2xl font-black tracking-wide text-emerald-600"
@@ -1258,7 +1258,7 @@ export default function Page() {
 
         {/* Footer mental */}
         <div className="mt-4 text-xs text-white/60">
-          <b>Ancla:</b> La aceptación no se respeta si muere el nivel que la sostiene (FVG/OB). Si hay liquidez pendiente, mirá invalidaciones antes de apretar el gatillo.
+          <b>Ancla:</b> Opero la estructura activa, no el evento pasado. Sin PD Array claro → no hay trade.
         </div>
       </div>
     </div>
