@@ -57,13 +57,13 @@ type JournalEntry = {
   helped: boolean;
   accuracy: JournalAccuracy;
   note: string;
+  dailyError: string;
+  dailyLearning: string;
 };
 
 // ✅ LS keys separadas (journal + draft de UI)
 const LS_JOURNAL_KEY = "pm_scalps_journal_v0";
 const LS_DRAFT_KEY = "pm_scalps_draft_v0";
-
-const LS_KEY = "pm_scalps_journal_v0";
 
 function levelLabel(l: Level) {
   switch (l) {
@@ -331,6 +331,9 @@ export default function Page() {
   const [setupTag, setSetupTag] = useState<SetupTag>("unknown");
   const [targetTag, setTargetTag] = useState<TargetTag>("NONE");
 
+  const [dailyError, setDailyError] = useState("");
+  const [dailyLearning, setDailyLearning] = useState("");
+
     useEffect(() => {
     // 1) Draft UI (flow)
     try {
@@ -531,56 +534,82 @@ export default function Page() {
     setInvalidationChoice(null);
   }
 
-    function saveJournalEntry() {
-        if (helped === null) return;
+  function saveJournalEntry() {
+  // Gate 1: sin “me ayudó / no me ayudó” no guardamos
+  if (helped === null) return;
 
-        const rrValue =
-          tradeTaken === "yes" && rr.trim() !== "" && Number.isFinite(Number(rr))
-            ? Number(rr)
-            : null;
+  // Gate 2: cierre del día obligatorio
+  const err = dailyError.trim();
+  const learn = dailyLearning.trim();
+  if (!err || !learn) return;
 
-        const entry: JournalEntry = {
-          id: crypto.randomUUID(),
-          createdAt: Date.now(),
+  // Normalizamos RR si tomaste trade
+  const rrValue =
+    tradeTaken === "yes"
+      ? (() => {
+          const n = Number(String(rr).replace(",", "."));
+          return Number.isFinite(n) ? n : null;
+        })()
+      : null;
 
-          liqTaken,
-          takenLevels,
-          lastTaken,
-          reaction,
-          pendingLevels,
-          hasFvg,
+  const entry: JournalEntry = {
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
 
-          biasShown,
-          marketState: marketState.state,
-          invalidationHappened,
-          invalidationChoice,
-          suggestedTargets,
+    liqTaken,
+    takenLevels,
+    lastTaken,
+    reaction,
+    pendingLevels,
+    hasFvg,
 
-          // ✅ NUEVO
-          tradeTaken,
-          rr: rrValue,
-          setupTag: tradeTaken === "yes" ? setupTag : "unknown",
-          targetTag: tradeTaken === "yes" ? targetTag : "NONE",
+    biasShown,
+    marketState: marketState.state,
+    invalidationHappened,
+    invalidationChoice,
+    suggestedTargets,
 
-          helped,
-          accuracy,
-          note: note.trim(),
-        };
+    // ✅ NUEVO: resultado real (OBLIGATORIO en el type)
+    tradeTaken,
+    rr: rrValue,
+    setupTag,
+    targetTag,
 
-        const next = [entry, ...journal].slice(0, 200);
-        persistJournal(next);
+    helped,
+    accuracy,
+    note: note.trim(),
 
-        setHelped(null);
-        setAccuracy("accurate");
-        setNote("");
+    // ✅ NUEVO: cierre del día
+    dailyError: err,
+    dailyLearning: learn,
+  };
 
-        // ✅ reset de inputs del journal pro
-        setTradeTaken("no");
-        setRr("");
-        setSetupTag("unknown");
-        setTargetTag("NONE");
-      }
+  const next = [entry, ...journal].slice(0, 200);
+  persistJournal(next);
 
+  // Reset de UI inputs
+  setHelped(null);
+  setAccuracy("accurate");
+  setNote("");
+
+  setTradeTaken("no");
+  setRr("");
+  setSetupTag("unknown");
+  setTargetTag("NONE");
+
+  setDailyError("");
+  setDailyLearning("");
+}
+  
+  const lastDailyWrap = useMemo(() => {
+      const latest = journal[0];
+      if (!latest) return null;
+
+      return {
+        error: latest.dailyError || "",
+        learning: latest.dailyLearning || "",
+      };
+    }, [journal]);
 
   function exportJournalJson() {
     const blob = new Blob([JSON.stringify(journal, null, 2)], { type: "application/json" });
@@ -616,6 +645,7 @@ export default function Page() {
   return (
     <div className="min-h-screen bg-neutral-950 text-white">
       <Header onReset={resetAll} />
+      
       <div className="mx-auto max-w-5xl px-4 py-6">
         {/* Output */}
         <div className={panel}>
@@ -1123,11 +1153,28 @@ export default function Page() {
           </div>
         )}
 
+        {/* ✅ Comentario del día (persistente) */}
+        {lastDailyWrap && (
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-3">
+            <div className="text-xs font-extrabold tracking-wide text-white/70">CIERRE DEL DÍA (ÚLTIMO GUARDADO)</div>
+
+            <div className="mt-3 rounded-xl border border-red-400/25 bg-red-500/10 p-3">
+              <div className="text-xs font-extrabold text-red-200/90">ERROR DEL DÍA</div>
+              <div className="mt-1 text-sm font-semibold text-white/90">{lastDailyWrap.error}</div>
+            </div>
+
+            <div className="mt-3 rounded-xl border border-sky-400/25 bg-sky-500/10 p-3">
+              <div className="text-xs font-extrabold text-sky-200/90">APRENDIZAJE / GUARDRAIL</div>
+              <div className="mt-1 text-sm font-semibold text-white/90">{lastDailyWrap.learning}</div>
+            </div>
+          </div>
+        )}
+
         {/* Journal */}
         <div className={panel}>
-          <div className="text-lg font-extrabold">Journal (v0)</div>
+          <div className="text-lg font-extrabold">Journal:</div>
           <div className="mt-1 text-sm text-white/65">
-            Guardás un snapshot del contexto + tu veredicto para medir si la app te sirve.
+            Guardás un snapshot del contexto y dejas un mensaje para la proxima sección.
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -1148,8 +1195,9 @@ export default function Page() {
               <option value="wrong">No</option>
             </select>
                       {/* ✅ NUEVO: Resultado real */}
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <div className="text-xs font-extrabold text-white/70">¿TOMASTE TRADE?</div>
+                <div className="mt-2 text-s font-extrabold text-white/70">¿Tomaste trade?</div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  
 
                   <button
                     onClick={() => setTradeTaken("yes")}
@@ -1218,6 +1266,40 @@ export default function Page() {
             className="mt-3 w-full resize-y rounded-xl border border-white/15 bg-white/5 p-3 text-sm font-semibold text-white/95 outline-none placeholder:text-white/40"
           />
 
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-3">
+          <div className="text-sm font-extrabold">
+            Cierre del día (obligatorio): completá ambos
+          </div>
+          <div className="mt-1 text-xs text-white/65">
+            Tip: si no hubo error, escribí “No hubo error hoy” (o “N/A”) igualmente.
+          </div>
+
+          <div className="mt-3 grid gap-3">
+            <div className="rounded-xl border border-red-400/20 bg-red-500/10 p-3">
+              <div className="text-xs font-extrabold text-red-200/90">ERROR DEL DÍA</div>
+              <textarea
+                value={dailyError}
+                onChange={(e) => setDailyError(e.target.value)}
+                placeholder='Ej: "Entré al mercado sin confirmación en m5. Me apuré."'
+                rows={3}
+                className="mt-2 w-full resize-y rounded-xl border border-white/15 bg-white/5 p-3 text-sm font-semibold text-white/95 outline-none placeholder:text-white/40"
+              />
+            </div>
+
+            <div className="rounded-xl border border-sky-400/20 bg-sky-500/10 p-3">
+              <div className="text-xs font-extrabold text-sky-200/90">APRENDIZAJE / APRECIACIÓN</div>
+              <textarea
+                value={dailyLearning}
+                onChange={(e) => setDailyLearning(e.target.value)}
+                placeholder='Ej: "Hoy fuí paciente, esperé el momento justo para entrar segun mi estrategia."'
+                rows={3}
+                className="mt-2 w-full resize-y rounded-xl border border-white/15 bg-white/5 p-3 text-sm font-semibold text-white/95 outline-none placeholder:text-white/40"
+              />
+            </div>
+          </div>
+        </div>
+          </div>      
+
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={saveJournalEntry}
@@ -1261,6 +1343,5 @@ export default function Page() {
           <b>Ancla:</b> Opero la estructura activa, no el evento pasado. Sin PD Array claro → no hay trade.
         </div>
       </div>
-    </div>
   );
 }

@@ -14,10 +14,7 @@ export default function Header({
         <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
             {/* Left */}
             <div className="flex items-center gap-3">
-            <div className="px-2.5 py-1 rounded-lg text-xs font-extrabold tracking-wide
-                            bg-emerald-500/20 text-emerald-300 border border-emerald-400/40">
-                PM
-            </div>
+            <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
             <div>
                 <div className="text-base font-extrabold tracking-wide">
