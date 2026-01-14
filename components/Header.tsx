@@ -1,5 +1,5 @@
 "use client";
-
+import Image from "next/image";
 import Link from "next/link";
 
 export default function Header({
@@ -14,8 +14,14 @@ export default function Header({
         <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
             {/* Left */}
             <div className="flex items-center gap-3">
-            <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-
+            <Image
+                src="/logo.png"
+                alt="PM Scalps Coach"
+                width={36}
+                height={36}
+                priority
+                className="rounded-md"
+            />
             <div>
                 <div className="text-base font-extrabold tracking-wide">
                 Scalps Coach
