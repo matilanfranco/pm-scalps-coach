@@ -24,7 +24,7 @@ export default function Header({
             />
             <div>
                 <div className="text-base font-extrabold tracking-wide">
-                Scalps Coach
+                PM Scalps Coach
                 </div>
             </div>
             </div>
