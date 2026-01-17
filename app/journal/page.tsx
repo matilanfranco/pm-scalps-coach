@@ -455,6 +455,16 @@ export default function Page() {
   const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!supabase) return;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!data.session) {
+        router.replace("/login");
+      }
+    });
+  }, [router, supabase]);
+
+  useEffect(() => {
     let mounted = true;
 
     (async () => {
