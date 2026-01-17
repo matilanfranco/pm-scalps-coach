@@ -1,9 +1,9 @@
 "use client";
 
+import Image from "next/image";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
-import Image from "next/image";
+import { getSupabaseClient } from "@/lib/supabaseClient";
 
 function cn(...xs: (string | false | null | undefined)[]) {
   return xs.filter(Boolean).join(" ");
@@ -23,6 +23,16 @@ export default function LoginPage() {
   const emailTrim = useMemo(() => email.trim(), [email]);
   const canSubmit = emailTrim.length > 3 && password.length >= 6 && !loading;
 
+  // helper: siempre te da supabase o te corta con mensaje
+  function requireSupabase() {
+    const sb = getSupabaseClient();
+    if (!sb) {
+      setErr("Supabase no está configurado (faltan env vars). Reiniciá el dev server.");
+      return null;
+    }
+    return sb;
+  }
+
   async function signIn(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
@@ -30,6 +40,9 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      const supabase = requireSupabase();
+      if (!supabase) return;
+
       const { error } = await supabase.auth.signInWithPassword({
         email: emailTrim,
         password,
@@ -51,6 +64,9 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      const supabase = requireSupabase();
+      if (!supabase) return;
+
       const { error } = await supabase.auth.signUp({
         email: emailTrim,
         password,
@@ -76,41 +92,25 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white relative overflow-hidden flex items-center justify-center p-4">
-      {/* glows */}
-      <div className="pointer-events-none absolute -top-48 left-1/2 h-130 w-130 -translate-x-1/2 rounded-full" />
-
       <div className="w-full max-w-sm">
-        {/* header */}
-        <div className="mb-5 text-center">
-         <div className="mb-6 text-center flex flex-col items-center gap-3">
+        <div className="mb-6 text-center flex flex-col items-center gap-3">
           <Image
-            src="/logo.png"   // o /logo.svg
+            src="/logo.png"
             alt="PM Scalps"
             width={72}
             height={72}
             priority
             className="rounded-2xl"
           />
-
-          <div className="text-xs font-black tracking-[0.22em] text-white/55">
-            PM SCALPS
-          </div>
-
-          <div className="text-2xl font-black">
-            {mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
-          </div>
-
-          <div className="text-sm text-white/60">
-            Email + password
-          </div>
-        </div>
+          <div className="text-xs font-black tracking-[0.22em] text-white/55">PM SCALPS</div>
+          <div className="text-2xl font-black">{mode === "login" ? "Iniciar sesión" : "Crear cuenta"}</div>
+          <div className="text-sm text-white/60">Email + password</div>
         </div>
 
         <form
           onSubmit={signIn}
           className="rounded-3xl border border-white/12 bg-white/4 backdrop-blur-xl p-5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]"
         >
-          {/* tabs */}
           <div className="mb-4 flex rounded-2xl border border-white/10 bg-white/4 p-1">
             <button
               type="button"
@@ -152,18 +152,15 @@ export default function LoginPage() {
               inputMode="email"
             />
 
-            <div className="relative">
-              <input
-                className={cn(input, "pr-12")}
-                placeholder="password (mín 6)"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                type="password"
-                autoComplete={mode === "login" ? "current-password" : "new-password"}
-              />
-            </div>
+            <input
+              className={cn(input)}
+              placeholder="password (mín 6)"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              type="password"
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
+            />
 
-            {/* messages */}
             {err && (
               <div className="rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
                 {err}
@@ -175,7 +172,6 @@ export default function LoginPage() {
               </div>
             )}
 
-            {/* actions */}
             {mode === "login" ? (
               <button type="submit" disabled={!canSubmit} className={btnPrimary}>
                 {loading ? "Entrando..." : "Entrar"}
@@ -186,12 +182,8 @@ export default function LoginPage() {
               </button>
             )}
 
-            {/* helper */}
-            <div className="pt-1 text-center text-xs text-white/45">
-              Tip: contraseña mínimo 6 caracteres.
-            </div>
+            <div className="pt-1 text-center text-xs text-white/45">Tip: contraseña mínimo 6 caracteres.</div>
 
-            {/* secondary */}
             <button
               type="button"
               disabled={loading}

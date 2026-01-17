@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
+import { getSupabaseClient } from "@/lib/supabaseClient";
 import { listTrades, listTradesSince } from "@/lib/tradesDb";
+
+
 
 type Level =
   | "PDH"
@@ -320,6 +322,8 @@ function rrGlowClass(rr: number | null) {
 }
 
 export default function HistoryPage() {
+  const supabase = getSupabaseClient();
+  if (!supabase) return; // o redirect/login, etc
   const router = useRouter();
 
   const [allTrades, setAllTrades] = useState<TradeEntry[]>([]);

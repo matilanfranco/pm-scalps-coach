@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabaseClient";
+import { getSupabaseClient } from "@/lib/supabaseClient";
 
 type UploadArgs = {
   userId: string;
@@ -7,11 +7,21 @@ type UploadArgs = {
 };
 
 type UploadResult = {
-  imgUrl: string;
+  imgUrl: string;   // publicUrl o signedUrl
   imgPath: string;
 };
 
 const BUCKET = "trade-charts";
+
+function sb() {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    throw new Error(
+      "Supabase client no inicializado. Revisá NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY."
+    );
+  }
+  return supabase;
+}
 
 function safeFileExt(file: File) {
   const name = file.name || "";
@@ -28,8 +38,8 @@ export async function uploadTradeImage(args: UploadArgs): Promise<UploadResult> 
   const ext = safeFileExt(file);
   const imgPath = `${userId}/${tradeId}.${ext}`;
 
-  // 🔍 DEBUG AUTH (una vez, prolijo)
-  const { data: sessData, error: sessErr } = await supabase.auth.getSession();
+  // debug auth
+  const { data: sessData, error: sessErr } = await sb().auth.getSession();
   if (sessErr) console.warn("getSession error:", sessErr);
 
   console.log("[storage] session:", {
@@ -41,20 +51,30 @@ export async function uploadTradeImage(args: UploadArgs): Promise<UploadResult> 
     path: imgPath,
   });
 
-  // 1) Upload
-  const { error: upErr } = await supabase.storage.from(BUCKET).upload(imgPath, file, {
+  // 1) Upload (reemplaza si ya existía)
+  const { error: upErr } = await sb().storage.from(BUCKET).upload(imgPath, file, {
     cacheControl: "3600",
-    upsert: false,
+    upsert: true,
     contentType: file.type || `image/${ext}`,
   });
 
   if (upErr) throw upErr;
 
-  // 2) Public URL
-  const { data: publicData } = supabase.storage.from(BUCKET).getPublicUrl(imgPath);
+  // 2) URL
+  // Si tu bucket es PUBLIC, esto alcanza:
+  const { data: publicData } = sb().storage.from(BUCKET).getPublicUrl(imgPath);
+  if (publicData?.publicUrl) {
+    return { imgUrl: publicData.publicUrl, imgPath };
+  }
 
-  const imgUrl = publicData.publicUrl;
-  if (!imgUrl) throw new Error("No se pudo obtener publicUrl del storage.");
+  // Si NO es public (o querés que sea privado), firmá URL:
+  const { data: signed, error: signErr } = await sb()
+    .storage
+    .from(BUCKET)
+    .createSignedUrl(imgPath, 60 * 60); // 1 hora
 
-  return { imgUrl, imgPath };
+  if (signErr) throw signErr;
+  if (!signed?.signedUrl) throw new Error("No se pudo obtener signedUrl del storage.");
+
+  return { imgUrl: signed.signedUrl, imgPath };
 }

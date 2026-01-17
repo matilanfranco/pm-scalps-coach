@@ -1,4 +1,14 @@
-import { supabase } from "@/lib/supabaseClient";
+import { getSupabaseClient } from "@/lib/supabaseClient";
+
+function sb() {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    throw new Error(
+      "Supabase client no inicializado. Revisá NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY."
+    );
+  }
+  return supabase;
+}
 
 export type TradeEntryDb = {
   userId: string;
@@ -32,7 +42,6 @@ export type TradeEntryDb = {
   imgPath?: string | null;
   imgUrl?: string | null;
 };
-
 
 function mapRow(r: any) {
   return {
@@ -73,7 +82,7 @@ export async function createTrade(trade: TradeEntryDb) {
     has_fvg: trade.hasFvg,
 
     bias_shown: trade.biasShown,
-    market_state: trade.marketState, // guardalo tal cual (json/text)
+    market_state: trade.marketState,
     invalidation_happened: trade.invalidationHappened,
     invalidation_choice: trade.invalidationChoice ?? null,
     suggested_targets: trade.suggestedTargets ?? [],
@@ -95,9 +104,7 @@ export async function createTrade(trade: TradeEntryDb) {
     img_url: trade.imgUrl ?? null,
   };
 
-  console.log("PAYLOAD DEBUG (before insert)", payload);
-
-  const { data, error } = await supabase
+  const { data, error } = await sb()
     .from("trades")
     .insert(payload)
     .select("id")
@@ -108,7 +115,7 @@ export async function createTrade(trade: TradeEntryDb) {
 }
 
 export async function listTrades(userId: string, n = 200) {
-  const { data, error } = await supabase
+  const { data, error } = await sb()
     .from("trades")
     .select("*")
     .eq("user_id", userId)
@@ -123,7 +130,7 @@ export async function updateTradeImage(
   tradeId: string,
   patch: { imgUrl: string; imgPath: string }
 ) {
-  const { error } = await supabase
+  const { error } = await sb()
     .from("trades")
     .update({ img_url: patch.imgUrl, img_path: patch.imgPath })
     .eq("id", tradeId);
@@ -132,7 +139,7 @@ export async function updateTradeImage(
 }
 
 export async function getTradeById(userId: string, tradeId: string) {
-  const { data, error } = await supabase
+  const { data, error } = await sb()
     .from("trades")
     .select("*")
     .eq("id", tradeId)
@@ -145,7 +152,7 @@ export async function getTradeById(userId: string, tradeId: string) {
 }
 
 export async function listTradesSince(userId: string, sinceMs?: number, limit = 500) {
-  let q = supabase
+  let q = sb()
     .from("trades")
     .select("*")
     .eq("user_id", userId)
@@ -159,5 +166,5 @@ export async function listTradesSince(userId: string, sinceMs?: number, limit = 
   const { data, error } = await q;
   if (error) throw error;
 
-  return (data ?? []).map(mapRow); // mapRow como ya lo tenés
+  return (data ?? []).map(mapRow);
 }

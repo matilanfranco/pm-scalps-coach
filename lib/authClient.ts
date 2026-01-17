@@ -1,10 +1,14 @@
-import { supabase } from "@/lib/supabaseClient";
+import { getSupabaseClient } from "@/lib/supabaseClient";
 
-export async function ensureAnonAuth() {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session?.user) return session.user;
+export async function ensureAuth() {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error("Supabase client no inicializado (env vars).");
 
-  const { data, error } = await supabase.auth.signInAnonymously();
+  const { data, error } = await supabase.auth.getSession();
   if (error) throw error;
-  return data.user;
+
+  const user = data.session?.user;
+  if (!user) throw new Error("NO SESSION");
+
+  return user; // { id, email, ... }
 }

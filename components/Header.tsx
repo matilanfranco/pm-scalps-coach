@@ -4,14 +4,21 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { getSupabaseClient } from "@/lib/supabaseClient";
 
 export default function Header() {
+  // ✅ hooks SIEMPRE arriba, sin returns antes
   const pathname = usePathname();
   const router = useRouter();
 
   const [loggingOut, setLoggingOut] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // ✅ recién acá
+  const supabase = getSupabaseClient();
+
+  // ✅ React: si no hay client, devolvé null
+  if (!supabase) return null;
 
   const navBtn =
     "px-3 py-2 rounded-xl text-sm font-extrabold transition border cursor-pointer";
@@ -20,32 +27,32 @@ export default function Header() {
   const navActive = "border-white/30 bg-white/10 text-white";
 
   async function handleLogout() {
-    try {
-      setLoggingOut(true);
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
+  const sb = supabase;       // ✅ copia local
+  if (!sb) return;           // ✅ guard para TS y runtime
 
-      // opcional: limpiar caches
-      localStorage.removeItem("trades_cache_v1");
-      localStorage.removeItem("trades_lastFetchedAt_v1");
+  try {
+    setLoggingOut(true);
+    const { error } = await sb.auth.signOut(); // ✅ usar sb
+    if (error) throw error;
 
-      setMobileOpen(false);
-      router.push("/login");
-      router.refresh();
-    } catch (e) {
-      console.error("Logout failed:", e);
-      alert("No se pudo cerrar sesión.");
-    } finally {
-      setLoggingOut(false);
-    }
+    localStorage.removeItem("trades_cache_v1");
+    localStorage.removeItem("trades_lastFetchedAt_v1");
+
+    setMobileOpen(false);
+    router.push("/login");
+    router.refresh();
+  } catch (e) {
+    console.error("Logout failed:", e);
+    alert("No se pudo cerrar sesión.");
+  } finally {
+    setLoggingOut(false);
   }
+}
 
-  // cerrar menú mobile al navegar
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname]);
 
-  // cerrar con ESC
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setMobileOpen(false);
@@ -57,7 +64,6 @@ export default function Header() {
   return (
     <header className="sticky top-0 z-50 backdrop-blur bg-black/70 border-b border-white/10">
       <div className="mx-auto max-w-6xl px-4 py-3">
-        {/* TOP ROW */}
         <div className="flex items-center justify-between gap-3">
           {/* LEFT */}
           <div className="flex items-center gap-3 min-w-0">

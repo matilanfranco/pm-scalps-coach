@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { getSupabaseClient } from "@/lib/supabaseClient";
 
 const BUCKET = "trade-charts";
 
@@ -19,12 +19,23 @@ export default function HardcodedUploadTest() {
 
   async function run() {
     setLog("running...");
-    try {
-      // 1) Ver sesión y user
-      const { data: sess } = await supabase.auth.getSession();
-      const session = sess.session;
 
-      if (!session?.user) {
+    try {
+      const supabase = getSupabaseClient();
+      if (!supabase) {
+        setLog("Supabase client no está inicializado. Revisá env vars (NEXT_PUBLIC_SUPABASE_URL / KEY).");
+        return;
+      }
+
+      // 1) Ver sesión y user
+      const { data: sess, error: sessErr } = await supabase.auth.getSession();
+      if (sessErr) {
+        setLog(`SESSION ERROR: ${sessErr.message}`);
+        return;
+      }
+
+      const session = sess.session;
+      if (!session?.user?.id) {
         setLog("NO SESSION. Tenés que estar logueado para este test.");
         return;
       }
@@ -35,17 +46,15 @@ export default function HardcodedUploadTest() {
       const blob = base64ToBlob(ONE_BY_ONE_PNG_BASE64, "image/png");
 
       // 3) Path hardcodeado (clave: empieza con uid/)
-      const path = `${session.user.id}/hardcoded-test.png`;
-      console.log(path)
+      const path = `${uid}/hardcoded-test.png`;
+      console.log("UPLOAD PATH:", path);
 
       // 4) Upload
-      const { data, error } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, blob, {
-          upsert: true,
-          contentType: "image/png",
-          cacheControl: "3600",
-        });
+      const { data, error } = await supabase.storage.from(BUCKET).upload(path, blob, {
+        upsert: true,
+        contentType: "image/png",
+        cacheControl: "3600",
+      });
 
       if (error) {
         setLog(`UPLOAD ERROR: ${error.message}`);
@@ -53,11 +62,35 @@ export default function HardcodedUploadTest() {
         return;
       }
 
-      // 5) Public url (si el bucket es public)
+      // 5) URL: public si se puede, sino signed (bucket privado)
       const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(path);
+      const publicUrl = pub?.publicUrl ?? "";
+
+      if (publicUrl) {
+        setLog(
+          `OK ✅\npath: ${path}\nreturned: ${JSON.stringify(data)}\npublicUrl: ${publicUrl}`
+        );
+        return;
+      }
+
+      // fallback: signed url (bucket privado)
+      const { data: signed, error: signedErr } = await supabase.storage
+        .from(BUCKET)
+        .createSignedUrl(path, 60 * 60); // 1h
+
+      if (signedErr) {
+        setLog(
+          `OK ✅ (pero no pude generar URL)\npath: ${path}\nreturned: ${JSON.stringify(
+            data
+          )}\nSIGNED URL ERROR: ${signedErr.message}`
+        );
+        return;
+      }
 
       setLog(
-        `OK ✅\npath: ${path}\nreturned: ${JSON.stringify(data)}\npublicUrl: ${pub.publicUrl}`
+        `OK ✅ (bucket privado)\npath: ${path}\nreturned: ${JSON.stringify(data)}\nsignedUrl: ${
+          signed?.signedUrl
+        }`
       );
     } catch (e: any) {
       setLog(`CRASH: ${e?.message ?? String(e)}`);
@@ -69,7 +102,7 @@ export default function HardcodedUploadTest() {
     <div className="p-6 text-white">
       <button
         onClick={run}
-        className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 font-bold"
+        className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 font-bold cursor-pointer"
       >
         Run hardcoded upload test
       </button>

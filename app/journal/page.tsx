@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
+import { getSupabaseClient } from "@/lib/supabaseClient";
 import { createTrade, listTrades, updateTradeImage } from "@/lib/tradesDb";
 import { uploadTradeImage } from "@/lib/uploadTradeImage";
 import HardcodedUploadTest from "@/components/HardcodedUploadTest";
@@ -407,6 +407,8 @@ function isValidHHMM(s: string) {
 }
 
 export default function Page() {
+  const supabase = getSupabaseClient();
+  if (!supabase) return; // o redirect/login, etc
   const [step, setStep] = useState<Step>(1);
 
   const [liqTaken, setLiqTaken] = useState<"yes" | "no" | "unknown">("unknown");

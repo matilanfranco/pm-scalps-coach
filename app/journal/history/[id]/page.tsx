@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
+import { getSupabaseClient } from "@/lib/supabaseClient";
 import { getTradeById } from "@/lib/tradesDb";
 
 type Level =
@@ -145,7 +145,10 @@ export default function TradeDetailPage() {
   const [status, setStatus] = useState<"loading" | "ok" | "notfound">("loading");
   const [openImg, setOpenImg] = useState<string | null>(null);
   const [imgUrl, setImgUrl] = useState<string>("");
-
+  
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+  
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
         if (e.key === "Escape") setOpenImg(null);
