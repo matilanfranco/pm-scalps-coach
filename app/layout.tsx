@@ -15,7 +15,6 @@ const geistMono = Geist_Mono({
 export const metadata = {
   title: "PM Scalps Coach",
   manifest: "/manifest.json",
-  themeColor: "#000000",
   icons: {
     apple: "/apple-touch-icon.png",
     icon: "/favicon.png", // o /favicon.ico
