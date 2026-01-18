@@ -3,22 +3,24 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 
 export default function Header() {
-  // ✅ hooks SIEMPRE arriba, sin returns antes
   const pathname = usePathname();
   const router = useRouter();
 
   const [loggingOut, setLoggingOut] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
-  // ✅ recién acá
-  const supabase = getSupabaseClient();
+  // ✅ Importante: no hagas return temprano.
+  // Hacé el client solo después de mount, así el primer HTML es estable.
+  const supabase = useMemo(() => (mounted ? getSupabaseClient() : null), [mounted]);
 
-  // ✅ React: si no hay client, devolvé null
-  if (!supabase) return null;
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const navBtn =
     "px-3 py-2 rounded-xl text-sm font-extrabold transition border cursor-pointer";
@@ -27,27 +29,28 @@ export default function Header() {
   const navActive = "border-white/30 bg-white/10 text-white";
 
   async function handleLogout() {
-  const sb = supabase;       // ✅ copia local
-  if (!sb) return;           // ✅ guard para TS y runtime
+    const sb = supabase;
+    if (!sb) return;
 
-  try {
-    setLoggingOut(true);
-    const { error } = await sb.auth.signOut(); // ✅ usar sb
-    if (error) throw error;
+    try {
+      setLoggingOut(true);
+      const { error } = await sb.auth.signOut();
+      if (error) throw error;
 
-    localStorage.removeItem("trades_cache_v1");
-    localStorage.removeItem("trades_lastFetchedAt_v1");
+      // esto está OK acá (solo corre en client)
+      localStorage.removeItem("trades_cache_v1");
+      localStorage.removeItem("trades_lastFetchedAt_v1");
 
-    setMobileOpen(false);
-    router.push("/login");
-    router.refresh();
-  } catch (e) {
-    console.error("Logout failed:", e);
-    alert("No se pudo cerrar sesión.");
-  } finally {
-    setLoggingOut(false);
+      setMobileOpen(false);
+      router.push("/login");
+      router.refresh();
+    } catch (e) {
+      console.error("Logout failed:", e);
+      alert("No se pudo cerrar sesión.");
+    } finally {
+      setLoggingOut(false);
+    }
   }
-}
 
   useEffect(() => {
     setMobileOpen(false);
@@ -109,8 +112,9 @@ export default function Header() {
 
             <button
               onClick={handleLogout}
-              disabled={loggingOut}
+              disabled={loggingOut || !supabase}
               className="h-10 rounded-xl border border-white/12 bg-white/5 px-3 py-2 text-sm font-extrabold text-white/80 hover:bg-white/10 hover:border-white/20 transition disabled:opacity-50 cursor-pointer"
+              title={!supabase ? "Cargando sesión…" : undefined}
             >
               {loggingOut ? "Saliendo..." : "Cerrar sesión"}
             </button>
@@ -152,8 +156,9 @@ export default function Header() {
 
               <button
                 onClick={handleLogout}
-                disabled={loggingOut}
+                disabled={loggingOut || !supabase}
                 className="h-11 rounded-xl border border-white/12 bg-white/5 px-3 text-sm font-extrabold text-white/80 hover:bg-white/10 hover:border-white/20 transition disabled:opacity-50 cursor-pointer w-full"
+                title={!supabase ? "Cargando sesión…" : undefined}
               >
                 {loggingOut ? "Saliendo..." : "Cerrar sesión"}
               </button>

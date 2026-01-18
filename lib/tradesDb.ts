@@ -14,18 +14,17 @@ export type TradeEntryDb = {
   userId: string;
   createdAt: number;
 
+  instrument: "ES" | "NQ";
+
   liqTaken: "yes" | "no" | "unknown";
-  takenLevels: any[];
   lastTaken: any | null;
   reaction: "accept" | "absorb" | "unclear";
-  pendingLevels: any[];
   hasFvg: "yes" | "no" | "skip";
 
   biasShown: "LONG" | "SHORT" | "WAIT" | "NO TRADE";
   marketState: any;
   invalidationHappened: "yes" | "no" | "unknown";
-  invalidationChoice: any | null;
-  suggestedTargets: any[];
+  invalidationChoice?: string | null;
 
   helped: boolean;
 
@@ -35,6 +34,10 @@ export type TradeEntryDb = {
   followedPlan: "yes" | "no";
   rr: number | null;
 
+  takenLevels: any[];
+  pendingLevels: any[];
+  suggestedTargets: any[];
+
   outcome?: "win" | "loss" | "be" | "unknown";
   setupTag?: string;
   note: string;
@@ -43,27 +46,53 @@ export type TradeEntryDb = {
   imgUrl?: string | null;
 };
 
+// tradesDb.ts
+
+export async function deleteTrade(userId: string, tradeId: string) {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error("Supabase not configured");
+
+  const { error } = await supabase
+    .from("trades")
+    .delete()
+    .eq("user_id", userId)
+    .eq("id", tradeId);
+
+  if (error) throw error;
+}
+
 function mapRow(r: any) {
   return {
     id: r.id,
     createdAt: new Date(r.created_at).getTime(),
+
+    instrument: r.instrument === "NQ" ? "NQ" : "ES",
+
+    liqTaken: r.liq_taken,
+    takenLevels: r.taken_levels ?? [],
+    lastTaken: r.last_taken ?? null,
+    reaction: r.reaction,
+    pendingLevels: r.pending_levels ?? [],
+    hasFvg: r.has_fvg,
+
+    biasShown: r.bias_shown,
+    marketState: r.market_state,
+    invalidationHappened: r.invalidation_happened,
+    invalidationChoice: r.invalidation_choice ?? null,
+    suggestedTargets: r.suggested_targets ?? [],
+
+    helped: r.helped ?? false,
+
     tradeTaken: r.trade_taken,
     tradeTime: r.trade_time,
     tradeSide: r.trade_side,
     followedPlan: r.followed_plan,
-    rr: r.rr,
-    outcome: r.outcome,
-    setupTag: r.setup_tag,
-    targetTag: r.target_tag,
-    biasShown: r.bias_shown,
-    marketState: r.market_state,
-    liqTaken: r.liq_taken,
-    lastTaken: r.last_taken,
-    reaction: r.reaction,
-    pendingLevels: r.pending_levels ?? [],
-    hasFvg: r.has_fvg,
-    helped: r.helped ?? false,
+    rr: r.rr ?? null,
+
+    outcome: r.outcome ?? "unknown",
+    setupTag: r.setup_tag ?? "unknown",
     note: r.note ?? "",
+
     imgUrl: r.img_url ?? null,
     imgPath: r.img_path ?? null,
   };
@@ -73,6 +102,8 @@ export async function createTrade(trade: TradeEntryDb) {
   const payload = {
     user_id: trade.userId,
     created_at: new Date(trade.createdAt).toISOString(),
+
+    instrument: trade.instrument ?? "ES",
 
     liq_taken: trade.liqTaken,
     taken_levels: trade.takenLevels ?? [],

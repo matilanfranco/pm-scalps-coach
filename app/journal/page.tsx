@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { createTrade, listTrades, updateTradeImage } from "@/lib/tradesDb";
 import { uploadTradeImage } from "@/lib/uploadTradeImage";
-import HardcodedUploadTest from "@/components/HardcodedUploadTest";
-
 
 
 
@@ -24,6 +22,8 @@ type Side = "buyside" | "sellside";
 type Reaction = "accept" | "absorb" | "unclear";
 type Step = 1 | 2 | 3 | 4 | 5;
 
+type Instrument = "ES" | "NQ";
+
 type MarketState =
   | "EXPANSION"
   | "DELIVERY_CONDITIONAL"
@@ -34,10 +34,10 @@ type MarketState =
 
 type Outcome = "PROFIT" | "STOP" | "BE" | "NONE";
 
-type InvalidationChoice = "micro_m5" | "shift_m15" | "ifvg";
+type InvalidationKind = "M5" | "M15";
+type YesNo = "yes" | "no";
 
 type SetupTag = "A" | "B" | "unknown";
-type TargetTag = Level | "HTF" | "NONE";
 
 type TradeSide = "BUY" | "SELL";
 type FollowedPlan = "yes" | "no";
@@ -53,11 +53,12 @@ type TradeEntry = {
   reaction: Reaction;
   pendingLevels: Level[];
   hasFvg: "yes" | "no" | "skip";
-
+  instrument: Instrument;
   biasShown: "LONG" | "SHORT" | "WAIT" | "NO TRADE";
   marketState: MarketState;
   invalidationHappened: "yes" | "no" | "unknown";
-  invalidationChoice: InvalidationChoice | null;
+  invalidationKind: InvalidationKind | null;
+  m15Imbalance: YesNo | null; // default "skip"
   suggestedTargets: Level[];
 
   // ✅ INPUTS DEL TRADE
@@ -74,6 +75,24 @@ type TradeEntry = {
   note: string; // descripción del trade
 };
 
+type InvalidationGuideLines = {
+  title: string;
+  tone: "good" | "danger" | "warn" | "muted";
+  lines: string[];
+};
+
+type InvalidationGuideSections = {
+  title: string;
+  tone: "good" | "danger" | "warn" | "muted";
+  sections: { h: string; bullets: string[] }[];
+};
+
+type InvalidationGuide = InvalidationGuideLines | InvalidationGuideSections | null;
+
+function hasSections(g: InvalidationGuide): g is InvalidationGuideSections {
+  return !!g && "sections" in g;
+}
+
 type DailyWrap = {
   date: string; // YYYY-MM-DD
   dailyError: string;
@@ -82,7 +101,6 @@ type DailyWrap = {
 };
 
 // ✅ LS keys
-const LS_TRADES_KEY = "pm_scalps_trades_v1";
 const LS_DAILY_KEY = "pm_scalps_daily_v1";
 const LS_DRAFT_KEY = "pm_scalps_draft_v0";
 
@@ -111,6 +129,12 @@ function levelSide(l: Level): Side {
   return l === "PDH" || l === "ASIA_H" || l === "LONDON_H" || l === "WEEKLY_H"
     ? "buyside"
     : "sellside";
+}
+
+function flipBias(bias: "LONG" | "SHORT" | "WAIT" | "NO TRADE") {
+  if (bias === "LONG") return "SHORT";
+  if (bias === "SHORT") return "LONG";
+  return bias;
 }
 
 function formatSide(s: Side) {
@@ -158,40 +182,13 @@ function inferBias(lastTaken: Level | null, reaction: Reaction) {
   return { bias: "WAIT" as const, reason: "Caso raro. Esperá confirmación." };
 }
 
-function inferMarketState(args: {
+function inferMarketStateBase(args: {
   liqTaken: "yes" | "no" | "unknown";
   reaction: Reaction;
   pendingLevels: Level[];
-  invalidationHappened: "yes" | "no" | "unknown";
-  invalidationChoice: InvalidationChoice | null;
   biasShown: "LONG" | "SHORT" | "WAIT" | "NO TRADE";
 }) {
-  const { liqTaken, reaction, pendingLevels, invalidationHappened, invalidationChoice, biasShown } = args;
-
-  if (invalidationHappened === "yes") {
-    if (invalidationChoice === "ifvg") {
-      return {
-        state: "WAIT" as const,
-        tone: "warn" as const,
-        desc:
-          "iFVG en M5 = INVALIDA la lectura previa, pero NO habilita reversa. M15 manda: esperá CHoCH/BOS real + nuevo PD Array antes de operar.",
-      };
-    }
-    if (invalidationChoice === "shift_m15") {
-      return {
-        state: "TRANSITION" as const,
-        tone: "danger" as const,
-        desc: "Cambio de delivery confirmado (M15 + displacement). Esperá retest a PD Array. No persigas precio.",
-      };
-    }
-    if (invalidationChoice === "micro_m5") {
-      return {
-        state: "TRANSITION" as const,
-        tone: "warn" as const,
-        desc: "Micro M5: puede ser ruido/stop-hunt. No habilita reversa. Esperá confirmación M15.",
-      };
-    }
-  }
+  const { liqTaken, reaction, pendingLevels, biasShown } = args;
 
   if (liqTaken === "no") {
     if (reaction === "absorb") {
@@ -262,105 +259,6 @@ function inferMarketState(args: {
   };
 }
 
-function invalidationInfo(choice: InvalidationChoice, currentBias: "LONG" | "SHORT" | "WAIT" | "NO TRADE") {
-  const opposite =
-    currentBias === "LONG" ? "SHORT" :
-    currentBias === "SHORT" ? "LONG" :
-    null;
-
-  const deliveryExplainer = [
-    "🧠 Cambio de delivery = el mercado deja de hacer lo que debía para sostener tu lectura.",
-    "La aceptación previa NO manda si el nivel que la sostenía muere.",
-    "Si hay liquidez pendiente (ej: London Low), estos shifts pesan más.",
-  ];
-
-  if (choice === "micro_m5") {
-    return {
-      title: "Micro BOS/CHoCH en M5 (ruido / stop-hunt)",
-      effect: "SOLO INVALIDA (no habilita reversa)",
-      state: "WAIT",
-      tone: "warn" as const,
-      when: [
-        "Rompió un HL/LH chico en M5 (micro estructura).",
-        "No hubo displacement real (drift / velas chicas).",
-        "Se siente como 'me saca y vuelve' (stop-hunt / limpieza).",
-      ],
-      whyMatters: [
-        "Invalida un entry apurado en continuation.",
-        "NO autoriza reversa: puede ser solo pullback/ruido.",
-      ],
-      action: [
-        "CANCELÁ el trade impulsivo. Pasás a modo espectador.",
-        "Esperá confirmación en M15 (CHoCH/BOS real + displacement).",
-        "Si después hay retest a PD Array + confirmación M5 → recién ahí se evalúa entrada.",
-      ],
-      deliveryExplainer,
-    };
-  }
-
-  if (choice === "shift_m15") {
-    return {
-      title: "CHoCH/BOS contrario en M15 + displacement",
-      effect: "INVALIDA FUERTE (reversa NO automática)",
-      state: "POSIBLE REVERSAL (solo si cumple condiciones)",
-      tone: "danger" as const,
-
-      when: [
-        "Rompe el swing REAL de M15 (no micro-ruido de M5).",
-        "Hay displacement claro (cuerpo grande / velocidad / expansión).",
-        "Suele dejar un FVG en dirección del quiebre (o un OB marcado).",
-      ],
-
-      whyMatters: [
-        "La lectura anterior muere: el mercado dejó de respetar el camino esperado.",
-        "El quiebre confirma intención, pero todavía NO te da un entry seguro.",
-        "Si entrás en la ruptura, te exponés al retest que te limpia (clásico).",
-      ],
-
-      action: [
-        "PASO 1 (STOP): cancelá el plan anterior. NO persigas la ruptura.",
-        "PASO 2 (ZONA): marcá la zona de retest probable: FVG M15 / OB / Breaker del displacement.",
-        "PASO 3 (RETEST): esperá que el precio vuelva a esa zona y RECHACE (no que la atraviese).",
-        "PASO 4 (ENTRY): solo entrás si en M5 hay confirmación limpia: shift M5 + reacción en PD Array.",
-        "PASO 5 (FILTRO): si M15 sostiene la nueva dirección → ok. Si vuelve adentro y anula el displacement → WAIT.",
-        `Habilitado SOLO si se cumplen TODAS: (1) quiebre M15 real, (2) retest+hold en PD Array, (3) confirmación M5, (4) target lógico. Si falta una → WAIT.`,
-      ],
-
-      deliveryExplainer: [
-        "🧠 Ruptura M15 = cambió el guión (INVALIDA el plan anterior).",
-        "Retest + hold = recién ahí te deja subirte.",
-        "Sin retest/confirmación = te quiere cazar (WAIT).",
-      ],
-    };
-  }
-
-  return {
-    title: "iFVG confirmada (break + retest + hold)",
-    effect: "INVALIDA (NO habilita reversa automática)",
-    state: opposite ? `BUSCAR ${opposite}` : "WAIT",
-    tone: "warn" as const,
-    when: [
-      "El FVG/OB que sostenía la lectura previa se rompe con CIERRE (no mecha).",
-      "Retestea desde el otro lado y RECHAZA (hold).",
-      "Se vuelve iFVG: soporte↔resistencia.",
-    ],
-    whyMatters: [
-      "Esto mata la idea anterior: el delivery dejó de sostener tu sesgo previo.",
-      "En modo conservador: M5 solo invalida. M15 decide si hay cambio real.",
-    ],
-    action: [
-      "NO operar reversa solo por iFVG en M5.",
-      "Esperar confirmación M15 (CHoCH/BOS real sobre swing) + displacement.",
-      "Recién ahí: buscar entry en PD Array M15 (FVG/OB/Breaker) con confirmación M5.",
-    ],
-    deliveryExplainer: [
-      "🧠 Regla: M5 invalida, M15 decide.",
-      "iFVG en M5 cancela la idea previa, pero NO crea una nueva por sí sola.",
-      "Si M15 no confirma: WAIT / no trade.",
-    ],
-  };
-}
-
 function toneToClasses(tone: "good" | "danger" | "warn" | "muted") {
   switch (tone) {
     case "good":
@@ -407,8 +305,9 @@ function isValidHHMM(s: string) {
 }
 
 export default function Page() {
-  const supabase = getSupabaseClient();
-  if (!supabase) return; // o redirect/login, etc
+  const router = useRouter();
+
+  // ✅ STATES (los tuyos tal cual)
   const [step, setStep] = useState<Step>(1);
 
   const [liqTaken, setLiqTaken] = useState<"yes" | "no" | "unknown">("unknown");
@@ -420,52 +319,57 @@ export default function Page() {
 
   const [showInvalidations, setShowInvalidations] = useState(false);
   const [invalidationHappened, setInvalidationHappened] = useState<"yes" | "no" | "unknown">("unknown");
-  const [invalidationChoice, setInvalidationChoice] = useState<InvalidationChoice | null>(null);
+  const [invalidationKind, setInvalidationKind] = useState<InvalidationKind | null>(null);
+  const [m15Imbalance, setM15Imbalance] = useState<YesNo | null>(null);
   const [liquidezPendienteVisible, setLiquidezPendienteVisible] = useState(false);
 
   const [helped, setHelped] = useState<boolean | null>(null);
   const [note, setNote] = useState("");
   const [trades, setTrades] = useState<TradeEntry[]>([]);
 
-  // ✅ Inputs del trade (pro)
   const [tradeTaken, setTradeTaken] = useState<"yes" | "no">("no");
-  const [tradeTime, setTradeTime] = useState<string>(""); // HH:MM
+  const [tradeTime, setTradeTime] = useState<string>("");
   const [tradeSide, setTradeSide] = useState<TradeSide>("BUY");
   const [followedPlan, setFollowedPlan] = useState<FollowedPlan>("yes");
-
   const [rr, setRr] = useState<string>("");
   const [setupTag, setSetupTag] = useState<SetupTag>("unknown");
   const [outcome, setOutcome] = useState<Outcome>("NONE");
 
-  // ✅ Daily separado
   const [dailyError, setDailyError] = useState("");
   const [dailyLearning, setDailyLearning] = useState("");
   const [dailySaved, setDailySaved] = useState<DailyWrap | null>(null);
 
   const [lastSavedTradeId, setLastSavedTradeId] = useState<string | null>(null);
-  const [imgUploading, setImgUploading] = useState(false);
 
   const [chartFile, setChartFile] = useState<File | null>(null);
   const [chartName, setChartName] = useState<string>("");
   const [chartStatus, setChartStatus] = useState<"idle" | "selected" | "uploading" | "done" | "error">("idle");
   const [chartUrl, setChartUrl] = useState<string | null>(null);
 
-    const router = useRouter();
   const [sessionReady, setSessionReady] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
 
+  const [instrument, setInstrument] = useState<Instrument>("NQ");
+
+  // ✅ “mounted” gate
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  // ✅ crear supabase solo en client real
+  const supabase = useMemo(() => {
+    return getSupabaseClient();
+  }, [mounted]);
+
+  /**
+   * ✅ Auth bootstrap (UN SOLO effect)
+   * - No corre hasta que mounted=true y supabase exista
+   * - Setea userId + sessionReady
+   * - Redirect a /login si no hay session
+   */
   useEffect(() => {
     if (!supabase) return;
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!data.session) {
-        router.replace("/login");
-      }
-    });
-  }, [router, supabase]);
-
-  useEffect(() => {
-    let mounted = true;
+    let alive = true;
 
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -476,43 +380,44 @@ export default function Page() {
         return;
       }
 
-      if (mounted) {
+      if (alive) {
         setUserId(s.user.id);
         setSessionReady(true);
       }
-
     })();
 
-    
-
     const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      if (!s) router.replace("/login");
-      else {
-        setUserId(s.user.id);
-        setSessionReady(true);
+      if (!s) {
+        router.replace("/login");
+        return;
       }
+      setUserId(s.user.id);
+      setSessionReady(true);
     });
 
     return () => {
-      mounted = false;
+      alive = false;
       sub.subscription.unsubscribe();
     };
-  }, [router]);
-  
+  }, [supabase, router]);
 
-useEffect(() => {
-  if (!userId) return;
+  /**
+   * ✅ Cargar trades cuando ya hay userId
+   */
+  useEffect(() => {
+    if (!userId) return;
 
-  (async () => {
-    try {
-      const rows = await listTrades(userId, 200);
-      setTrades(rows as any);
-    } catch (err) {
-      console.error("BOOT FAIL (supabase):", err);
-      setTrades([]);
-    }
-  })();
-}, [userId]);
+    (async () => {
+      try {
+        const rows = await listTrades(userId, 200);
+        setTrades(rows as any);
+      } catch (err) {
+        console.error("BOOT FAIL (supabase):", err);
+        setTrades([]);
+      }
+    })();
+  }, [userId]);
+
 
   useEffect(() => {
     // 1) Draft UI (flow)
@@ -530,7 +435,14 @@ useEffect(() => {
 
         if (typeof d.showInvalidations === "boolean") setShowInvalidations(d.showInvalidations);
         if (d.invalidationHappened) setInvalidationHappened(d.invalidationHappened);
-        if (d.invalidationChoice !== undefined) setInvalidationChoice(d.invalidationChoice);
+
+        if (d.invalidationKind === "M5" || d.invalidationKind === "M15" || d.invalidationKind === null) {
+          setInvalidationKind(d.invalidationKind);
+        }
+
+        if (d.m15Imbalance === "yes" || d.m15Imbalance === "no" || d.m15Imbalance === null) {
+          setM15Imbalance(d.m15Imbalance);
+}
       }
     } catch {}
 
@@ -563,7 +475,8 @@ useEffect(() => {
         pendingLevels,
         showInvalidations,
         invalidationHappened,
-        invalidationChoice,
+        invalidationKind,
+        m15Imbalance,
       };
       localStorage.setItem(LS_DRAFT_KEY, JSON.stringify(draft));
     } catch {}
@@ -577,12 +490,11 @@ useEffect(() => {
     pendingLevels,
     showInvalidations,
     invalidationHappened,
-    invalidationChoice,
+    invalidationKind,
+    m15Imbalance,
   ]);
 
-  function persistTrades(next: TradeEntry[]) {
-      setTrades(next);
-    }
+  
 
     async function uploadChartIfPossible(opts?: { tradeId?: string }) {
       const tradeId = opts?.tradeId ?? lastSavedTradeId;
@@ -627,18 +539,116 @@ useEffect(() => {
     setDailySaved(nextForToday);
   }
 
+const invalidationGuide = useMemo<InvalidationGuide>(() => {
+  if (invalidationHappened !== "yes") return null;
+
+  if (invalidationKind === "M5") {
+    return {
+      title: "INVALIDACIÓN M5 (micro) = setup cancelado",
+      tone: "warn" as const,
+      lines: [
+        "Qué significa: invalida el setup, pero NO confirma reversal.",
+        "Qué hacés: pasás a ESPECTADOR hasta que M15 haga BOS o m5 vuelva a alinear.",
+        "Regla: no persigas precio, esperá nuevo PD Array + confirmación.",
+      ],
+    };
+  }
+
+  if (invalidationKind === "M15" && m15Imbalance === "no") {
+    return {
+      title: "SHIFT M15 sin displacement = intención no confirmada",
+      tone: "warn" as const,
+      lines: [
+        "Rompió algo, pero sin expansión clara.",
+        "Qué hacés: WAIT / condicional hasta que aparezca un displacement real.",
+        "Si no hay FVG / OB claro post-quiebre: no hay trade.",
+      ],
+    };
+  }
+
+  if (invalidationKind === "M15" && m15Imbalance === "yes") {
+    return {
+      title: "POSIBLE REVERSAL (solo si cumple condiciones)",
+      tone: "danger" as const,
+      sections: [
+        {
+          h: "Descripción del escenario:",
+          bullets: [
+            "Rompe el swing REAL de M15 (no micro-ruido de M5).",
+            "Hay displacement claro (cuerpo grande / velocidad / expansión).",
+            "Suele dejar un FVG en dirección del quiebre.",
+          ],
+        },
+        {
+          h: "¿Por qué invalida la dirección anterior?",
+          bullets: [
+            "La lectura anterior muere: el mercado dejó de respetar el camino esperado.",
+            "El quiebre confirma intención, pero todavía NO te da un entry seguro.",
+            "Si entrás en la ruptura, te exponés al retest que balancea el precio / te expones a un RR muy bajo.",
+          ],
+        },
+        {
+          h: "¿Qué hacés ahora?",
+          bullets: [
+            "PASO 1 (STOP): cancelá el plan anterior. NO persigas la ruptura.",
+            "PASO 2 (ZONA): marcá la zona de retest probable: FVG M15 + m5 / OB importante / Breaker.",
+            "PASO 3 (RETEST): esperá que el precio vuelva a esa zona y RECHACE (no que la atraviese).",
+            "PASO 4 (ENTRY): solo entrás si en M5 hay confirmación limpia: shift M5 + reacción en PD Array.",
+            "PASO 5 (FILTRO): si M15 sostiene la nueva dirección → ok. Si vuelve adentro y anula el displacement → WAIT.",
+            "Habilitado SOLO si se cumplen TODAS: (1) quiebre M15 real, (2) retest+hold en PD Array, (3) confirmación M5, (4) target lógico. Si falta una → WAIT.",
+          ],
+        },
+        // {
+        //   h: "Mini regla 🧠",
+        //   bullets: [
+        //     "Ruptura M15 = cambió el guión (INVALIDA el plan anterior).",
+        //     "Retest + hold = recién ahí te deja subirte.",
+        //     "Sin retest/confirmación = te quiere cazar (WAIT).",
+        //   ],
+        // },
+      ],
+    };
+  }
+
+  if (invalidationKind === "M15" && m15Imbalance === null) {
+    return {
+      title: "Hubo ruptura clara en M15: falta confirmar displacement",
+      tone: "warn" as const,
+      lines: ["Respondé si hubo displacement con imbalance para completar la lectura."],
+    };
+  }
+
+  return null;
+}, [invalidationHappened, invalidationKind, m15Imbalance]);
+
   const bias = useMemo(() => inferBias(lastTaken, reaction), [lastTaken, reaction]);
 
   const modeNoLiq = reaction === "accept" ? "EXPANSION" : reaction === "absorb" ? "RANGE" : "UNCLEAR";
 
-  const biasShown: "LONG" | "SHORT" | "WAIT" | "NO TRADE" =
-    liqTaken === "no"
-      ? modeNoLiq === "EXPANSION"
-        ? "WAIT"
-        : modeNoLiq === "RANGE"
-          ? "NO TRADE"
-          : "WAIT"
-      : bias.bias;
+  const baseBiasShown: "LONG" | "SHORT" | "WAIT" | "NO TRADE" =
+  liqTaken === "no"
+    ? modeNoLiq === "EXPANSION"
+      ? "WAIT"
+      : modeNoLiq === "RANGE"
+        ? "NO TRADE"
+        : "WAIT"
+    : bias.bias;
+
+   const biasShown = useMemo<"LONG" | "SHORT" | "WAIT" | "NO TRADE">(() => {
+  // sin invalidación: sesgo normal
+  if (invalidationHappened !== "yes") return baseBiasShown;
+
+  // M5 invalida setup, NO reversa => espectador
+  if (invalidationKind === "M5") return "WAIT";
+
+  // M15 cambia delivery, pero SOLO si hay displacement
+  if (invalidationKind === "M15") {
+    if (m15Imbalance === "yes") return flipBias(baseBiasShown);
+    return "WAIT"; // <- si es "no" o null, WAIT
+  }
+
+  return baseBiasShown;
+}, [invalidationHappened, invalidationKind, m15Imbalance, baseBiasShown]);
 
   const biasReason =
     biasShown === "LONG"
@@ -649,21 +659,54 @@ useEffect(() => {
           ? "No hay estructura activa clara para operar. Esperá sweep/shift válido o PD Array limpio."
           : "Contexto desordenado o rango. Mercado abierto, pero no operable.";
 
-  const marketState = useMemo(() => {
-    return inferMarketState({
+  const baseMarketState = useMemo(() => {
+    return inferMarketStateBase({
       liqTaken,
       reaction,
       pendingLevels,
-      invalidationHappened,
-      invalidationChoice,
-      biasShown,
+      biasShown, // ojo: ya es el bias final (con flip si M15)
     });
-  }, [liqTaken, reaction, pendingLevels, invalidationHappened, invalidationChoice, biasShown]);
+  }, [liqTaken, reaction, pendingLevels, biasShown]);
 
-  const inval = useMemo(() => {
-    if (!invalidationChoice) return null;
-    return invalidationInfo(invalidationChoice, biasShown);
-  }, [invalidationChoice, biasShown]);
+  const marketState = useMemo(() => {
+      if (invalidationHappened !== "yes") return baseMarketState;
+
+      // M5: invalida pero NO cambia narrativa
+      if (invalidationKind === "M5") {
+        return {
+          state: "WAIT" as const,
+          tone: "warn" as const,
+          desc: "Invalidación micro (M5): invalida el setup, pero no confirma reversa. Esperá confirmación M15.",
+        };
+      }
+
+      // M15: cambia delivery (pero depende de displacement)
+      if (invalidationKind === "M15") {
+        if (m15Imbalance === "yes") {
+          return {
+            state: "TRANSITION" as const,
+            tone: "danger" as const,
+            desc: "Shift M15 con displacement: cambio de delivery confirmado. Esperá retest a PD Array + confirmación M5.",
+          };
+        }
+        if (m15Imbalance === "no") {
+          return {
+            state: "DELIVERY_CONDITIONAL" as const,
+            tone: "warn" as const,
+            desc: "Shift M15 sin displacement: intención no confirmada. Mejor espera hasta que aparezca un próximo movimiento con intensión que te genere una nueva lectura del mercado.",
+          };
+        }
+
+        // si todavía no respondió imbalance
+        return {
+          state: "WAIT" as const,
+          tone: "warn" as const,
+          desc: "Elegiste M15: falta responder si hubo displacement (imbalance).",
+        };
+      }
+
+      return baseMarketState;
+    }, [baseMarketState, invalidationHappened, invalidationKind, m15Imbalance]);
 
   const suggestedTargets = useMemo((): Level[] => {
     if (biasShown !== "LONG" && biasShown !== "SHORT") return [];
@@ -690,7 +733,7 @@ useEffect(() => {
         body: [
           `Hay aceptación post-toma (${took}), pero queda liquidez pendiente CONTRARIA al sesgo.`,
           "Eso suele generar delivery incompleto: puede continuar… o invalidarse fuerte.",
-          "Resultado: no te cases. Vigilá invalidaciones (CHoCH M15 / iFVG).",
+          "Resultado: Vigilá mucho posibles SMT e invalidaciones (CHoCH M15 / iFVG).",
         ],
       };
     }
@@ -757,7 +800,8 @@ useEffect(() => {
     setPendingLevels([]);
     setShowInvalidations(false);
     setInvalidationHappened("unknown");
-    setInvalidationChoice(null);
+    setInvalidationKind(null);
+    setM15Imbalance(null);
     setLiquidezPendienteVisible(false)
   }
 
@@ -791,12 +835,15 @@ useEffect(() => {
     reaction,
     pendingLevels,
     hasFvg,
+    instrument,
 
     biasShown,
     marketState: marketState.state,
     invalidationHappened,
-    invalidationChoice,
+    invalidationKind,
+    m15Imbalance,
     suggestedTargets,
+
 
     // inputs trade
     helped,
@@ -818,10 +865,36 @@ useEffect(() => {
     try {
     if (!userId) return;
 
-    const tradeId = await createTrade({
-      ...entry,
+   const tradeId = await createTrade({
       userId,
+      createdAt: entry.createdAt,
+
+      liqTaken: entry.liqTaken,
+      takenLevels: entry.takenLevels,          // ✅ array
+      lastTaken: entry.lastTaken,
+      reaction: entry.reaction,
+      pendingLevels: entry.pendingLevels,      // ✅ array
+      hasFvg: entry.hasFvg,
+
+      instrument: entry.instrument,
+
+      biasShown: entry.biasShown,
+      marketState: entry.marketState,
+
+      invalidationHappened: entry.invalidationHappened,
+      suggestedTargets: entry.suggestedTargets, // ✅ array
+      
+
+      helped: entry.helped,
+      tradeTaken: entry.tradeTaken,
+      tradeTime: entry.tradeTime,
+      tradeSide: entry.tradeSide,
+      followedPlan: entry.followedPlan,
+      rr: entry.rr,
+      setupTag: entry.setupTag,
       outcome: outcomeToDb(entry.outcome),
+
+      note: entry.note,
     });
 
     setLastSavedTradeId(tradeId);
@@ -903,13 +976,26 @@ useEffect(() => {
   const pillOn = "border-white/30 bg-white/10";
 
   const tradeTimeOk = tradeTaken !== "yes" || isValidHHMM(tradeTime);
-  const canSaveTrade = helped !== null && tradeTimeOk;
+  const invalidationOk =
+  invalidationHappened !== "yes" ||
+  invalidationKind !== "M15" ||
+  m15Imbalance !== null;
+
+  const canSaveTrade = helped !== null && tradeTimeOk && invalidationOk;
 
   const todayKey = getTodayKey();
 
   if (!sessionReady || !userId) {
     return <div className="min-h-screen bg-neutral-950 text-white p-6">Cargando…</div>;
   }
+
+  const loadingText = !mounted
+  ? "Cargando…"
+  : !supabase
+  ? "Supabase no configurado."
+  : !sessionReady || !userId
+  ? "Cargando…"
+  : null;
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white">
@@ -957,6 +1043,33 @@ useEffect(() => {
               <div className="text-sm font-extrabold">Estado del mercado: {marketState.state}</div>
               <div className="mt-1 text-sm text-white/85">{marketState.desc}</div>
             </div>
+            {invalidationGuide && (
+              <div className={`mt-4 rounded-2xl border p-4 ${toneToClasses(invalidationGuide.tone)}`}>
+                <p className="text-xs text-white/50 mb-2">OUTPUT DEL PANEL INVALIDACIONES:</p>
+                <div className="text-sm font-extrabold">{invalidationGuide.title}</div>
+
+                {hasSections(invalidationGuide) ? (
+                  <div className="mt-3 grid gap-4 text-sm text-white/90">
+                    {invalidationGuide.sections.map((s, idx) => (
+                      <div key={idx}>
+                        <div className="font-extrabold text-white/95">{s.h}</div>
+                        <div className="mt-2 grid gap-1">
+                          {s.bullets.map((b, i) => (
+                            <div key={i}>• {b}</div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-2 grid gap-1 text-sm text-white/90">
+                    {invalidationGuide.lines.map((l, i) => (
+                      <div key={i}>• {l}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {liqTaken === "yes" && (
@@ -967,7 +1080,7 @@ useEffect(() => {
             </div>
           )}
 
-          {deliveryStatus && (
+          {deliveryStatus && invalidationKind !== "M15" &&  (
             <div className={`mt-4 rounded-2xl border p-3 ${toneToClasses(deliveryStatus.tone)}`}>
               <div className="font-extrabold">Estado del delivery: {deliveryStatus.title}</div>
 
@@ -1043,158 +1156,97 @@ useEffect(() => {
             <div className="mt-4 border-t border-white/10 pt-4">
               <div className="text-base font-extrabold">Invalidaciones (cambio de delivery)</div>
               <div className="mt-1 text-sm text-white/70">
-                La idea es: <b>M5 solo invalida</b>. <b>M15 confirma el cambio</b>. <b>Retest + hold habilita entry</b>.
+                <b>M5 invalida - M15 confirma</b> (si hay displacement).
               </div>
 
               <div className="mt-3">
-                <div className="text-sm font-extrabold text-white/90">¿Pasó algo de esto?</div>
+                <div className="text-sm font-extrabold text-white/90">¿Hubo invalidación?</div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button
+                    className={btn}
                     onClick={() => {
                       setInvalidationHappened("no");
-                      setInvalidationChoice(null);
+                      setInvalidationKind(null);
+                      setM15Imbalance(null);
                     }}
-                    className={btn}
                   >
                     No
                   </button>
-                  <button onClick={() => setInvalidationHappened("yes")} className={btn}>
+
+                  <button
+                    className={btn}
+                    onClick={() => {
+                      setInvalidationHappened("yes");
+                      // no elegimos kind todavía
+                    }}
+                  >
                     Sí
                   </button>
                 </div>
 
                 {invalidationHappened === "no" && (
                   <div className="mt-3 text-sm text-white/85">
-                    Perfecto. Seguí con el plan original. No inventes “shifts” por ansiedad.
+                    Bien. Seguís con el plan original.
                   </div>
                 )}
 
                 {invalidationHappened === "yes" && (
                   <div className="mt-4">
-                    <div className="text-sm font-extrabold text-white/90">¿Cuál?</div>
+                    <div className="text-sm font-extrabold text-white/90">¿En qué TF fue?</div>
 
                     <div className="mt-2 flex flex-wrap gap-2">
                       <button
-                        onClick={() => setInvalidationChoice("micro_m5")}
-                        className={[
-                          btn,
-                          invalidationChoice === "micro_m5" ? "border-amber-400/50 bg-amber-500/10" : "",
-                        ].join(" ")}
+                        className={[btn, invalidationKind === "M5" ? "border-amber-400/50 bg-amber-500/10" : ""].join(" ")}
+                        onClick={() => {
+                          setInvalidationKind("M5");
+                          setM15Imbalance(null);
+                        }}
                       >
-                        1) Micro M5
+                        M5 (invalida)
                       </button>
 
                       <button
-                        onClick={() => setInvalidationChoice("shift_m15")}
-                        className={[
-                          btn,
-                          invalidationChoice === "shift_m15" ? "border-red-400/50 bg-red-500/10" : "",
-                        ].join(" ")}
+                        className={[btn, invalidationKind === "M15" ? "border-red-400/50 bg-red-500/10" : ""].join(" ")}
+                        onClick={() => {
+                          setInvalidationKind("M15");
+                          // ACA ES LA COSA
+                          setM15Imbalance(null); // obliga a responder
+                        }}
                       >
-                        2) Shift M15 + disp
-                      </button>
-
-                      <button
-                        onClick={() => setInvalidationChoice("ifvg")}
-                        className={[
-                          btn,
-                          invalidationChoice === "ifvg" ? "border-emerald-400/50 bg-emerald-500/10" : "",
-                        ].join(" ")}
-                      >
-                        3) iFVG confirmada
+                        M15 (cambio de delivery)
                       </button>
                     </div>
 
-                    {inval && (
-                      <div className={`mt-4 rounded-2xl border p-4 ${toneToClasses(inval.tone)}`}>
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <div className="text-base font-extrabold">{inval.title}</div>
-                          <div className="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs font-extrabold text-white/90">
-                            {inval.effect}
+                    {/* Pregunta extra SOLO si M15 */}
+                    {invalidationKind === "M15" && (
+                      <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                        <div className="text-sm font-extrabold text-white/90">
+                          ¿Hubo displacement / imbalance en la ruptura?
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button
+                            className={[btn, m15Imbalance === "yes" ? "border-emerald-400/50 bg-emerald-500/10" : ""].join(" ")}
+                            onClick={() => setM15Imbalance("yes")}
+                          >
+                            Sí
+                          </button>
+                          <button
+                            className={[btn, m15Imbalance === "no" ? "border-amber-400/50 bg-amber-500/10" : ""].join(" ")}
+                            onClick={() => setM15Imbalance("no")}
+                          >
+                            No
+                          </button>
+                        </div>
+
+                        {m15Imbalance === null && (
+                          <div className="mt-2 text-xs text-white/70">
+                            Esto es obligatorio: el estado del mercado tiene que tener respuesta.
                           </div>
-                        </div>
-
-                        <div className="mt-2 text-sm">
-                          <span className="font-extrabold">Estado ahora:</span> {inval.state}
-                        </div>
-
-                        <div className="my-4 h-px bg-white/10" />
-
-                        <div className="grid gap-4">
-                          <section>
-                            <div className="font-extrabold">Cuándo es esto (pattern)</div>
-                            <div className="mt-2 grid gap-1 text-sm text-white/85">
-                              {inval.when.map((x: string, i: number) => (
-                                <div key={i}>• {x}</div>
-                              ))}
-                            </div>
-                          </section>
-
-                          <section>
-                            <div className="font-extrabold">Por qué invalida (delivery)</div>
-                            <div className="mt-2 grid gap-1 text-sm text-white/85">
-                              {inval.whyMatters.map((x: string, i: number) => (
-                                <div key={i}>• {x}</div>
-                              ))}
-                            </div>
-                          </section>
-
-                          <section>
-                            <div className="font-extrabold">Qué hacés ahora</div>
-                            <div className="mt-2 grid gap-1 text-sm text-white/85">
-                              {inval.action.map((x: string, i: number) => (
-                                <div key={i}>• {x}</div>
-                              ))}
-                            </div>
-                          </section>
-
-                          {invalidationChoice === "ifvg" && (
-                            <section>
-                              <div className="font-extrabold">Target lógico sugerido</div>
-
-                              {suggestedTargets.length ? (
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  {suggestedTargets.map((t) => (
-                                    <div
-                                      key={t}
-                                      className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-extrabold"
-                                      title="Se basa en tu liquidez pendiente marcada"
-                                    >
-                                      🎯 {levelLabel(t)}
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div className="mt-2 text-sm text-white/85">
-                                  No marcaste liquidez pendiente alineada a esta reversa. Si estás seguro, usá HTF
-                                  (weekly/daily) como target.
-                                </div>
-                              )}
-
-                              <div className="mt-2 text-sm text-white/70">
-                                Tip: si el target está MUY lejos y no hay estructura limpia → bajá expectativa (1.5R).
-                              </div>
-                            </section>
-                          )}
-
-                          <section>
-                            <div className="font-extrabold">Mini regla (para el bocho)</div>
-                            <div className="mt-2 grid gap-1 text-sm text-white/85">
-                              {inval.deliveryExplainer.map((x: string, i: number) => (
-                                <div key={i}>• {x}</div>
-                              ))}
-                            </div>
-                          </section>
-                        </div>
+                        )}
                       </div>
                     )}
                   </div>
                 )}
-              </div>
-
-              <div className="mt-3 text-xs text-white/65">
-                Regla: <b>La aceptación no se respeta</b> si muere el nivel que la sostiene (FVG/OB). Y si hay liquidez
-                pendiente, más todavía.
               </div>
             </div>
           )}
@@ -1409,9 +1461,6 @@ useEffect(() => {
               <button onClick={() => setHasFvg("no")} className={hasFvg === "no" ? btnDanger : btn}>
                 No hay FVG
               </button>
-              <button onClick={() => setHasFvg("skip")} className={hasFvg === "skip" ? btnPrimary : btn}>
-                Skip
-              </button>
             </div>
 
             <div className="mt-4">
@@ -1429,7 +1478,7 @@ useEffect(() => {
                     <b>Setup B:</b> continuación impulsiva con reacción en FVG importante → buscá <b>1.5R</b>.
                   </div>
                   <div className="mt-3 text-sm text-white/85">
-                    <b>Regla:</b> si estás persiguiendo precio, esto NO es tu trade.
+                    <b>Regla:</b> chequea que no haya SMT. Si hay SMT o divergencias en el precio, no operes.
                   </div>
                 </div>
               ) : (
@@ -1440,9 +1489,6 @@ useEffect(() => {
             <div className="mt-4 flex flex-wrap gap-2">
               <button onClick={() => setStep(4)} className={btn}>
                 ← Atrás
-              </button>
-              <button onClick={resetAll} className={btnPrimary}>
-                Nuevo chequeo
               </button>
             </div>
           </div>
@@ -1468,6 +1514,32 @@ useEffect(() => {
             <button onClick={() => setTradeTaken("no")} className={tradeTaken === "no" ? btnDanger : btn}>
               No
             </button>
+
+            <div className="h-11 flex items-center px-2 text-xs font-extrabold text-white/70">
+              Instrumento
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setInstrument("NQ")}
+                className={[pill, instrument === "NQ" ? pillOn : ""].join(" ")}
+                disabled={tradeTaken !== "yes"}
+              >
+                NQ
+              </button>
+
+              <button
+                onClick={() => setInstrument("ES")}
+                className={[pill, instrument === "ES" ? pillOn : ""].join(" ")}
+                disabled={tradeTaken !== "yes"}
+              >
+                ES
+              </button>
+            </div>
+
+            <div className="h-11 flex items-center px-2 text-xs font-extrabold text-white/70">
+              Hora
+            </div>
 
             <input
               value={tradeTime}
@@ -1617,9 +1689,7 @@ useEffect(() => {
               </div>
             )}
           </div>
-    
-
-
+          
           {tradeTaken === "yes" && !tradeTimeOk && (
             <div className="mt-2 text-sm text-red-200/90">
               Hora inválida. Usá formato <b>HH:MM</b> (ej: 14:35).
@@ -1641,42 +1711,11 @@ useEffect(() => {
             >
               Guardar trade
             </button>
-            {/* <button onClick={exportTradesJson} className={btn}>
-              Export JSON
-            </button> */}
           </div>
 
           <div className="mt-3 text-sm text-white/80">
             <b>Trades guardados:</b> {trades.length}
           </div>
-
-          {/* <div className="mt-3 grid gap-2">
-            {trades.slice(0, 10).map((t) => (
-              <div key={t.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-sm font-extrabold">{new Date(t.createdAt).toLocaleDateString()}</div>
-                  <div className="text-xs text-white/80">
-                    <b>{t.marketState}</b> · {t.biasShown} · {t.helped ? "ayudó" : "no ayudó"}{" "}
-                    {t.tradeTaken === "yes" ? (
-                      <>
-                        · <b>TRADE</b> · {t.tradeSide} · {t.tradeTime} · plan:{t.followedPlan} · RR {t.rr ?? "—"} ·{" "}
-                        {t.setupTag !== "unknown" ? `Setup ${t.setupTag}` : "Setup —"} · Resultado {t.outcome}
-                      </>
-                    ) : (
-                      <>· <b>NO TRADE</b></>
-                    )}
-                  </div>
-                </div>
-
-                {t.note && <div className="mt-2 text-sm text-white/85">{t.note}</div>}
-
-                <div className="mt-3 text-xs text-white/65">
-                  Snapshot: liqTaken {t.liqTaken} · last {t.lastTaken ? levelLabel(t.lastTaken) : "—"} · reaction{" "}
-                  {t.reaction} · pending {t.pendingLevels.length}
-                </div>
-              </div>
-            ))}
-          </div> */}
         </div>
 
         {/* ✅ Daily wrap (separado) */}
@@ -1727,7 +1766,6 @@ useEffect(() => {
             )}
           </div>
         </div>
-          <HardcodedUploadTest />
       </div>
     </div>
   );

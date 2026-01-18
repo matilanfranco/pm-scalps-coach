@@ -16,6 +16,8 @@ type Level =
   | "WEEKLY_H"
   | "WEEKLY_L";
 
+type Instrument = "ES" | "NQ";
+
 type Reaction = "accept" | "absorb" | "unclear";
 type MarketState =
   | "EXPANSION"
@@ -34,6 +36,8 @@ type FollowedPlan = "yes" | "no";
 type TradeEntry = {
   id: string;
   createdAt: number;
+
+  instrument: Instrument;
 
   liqTaken: "yes" | "no" | "unknown";
   takenLevels: Level[];
@@ -282,6 +286,9 @@ export default function TradeDetailPage() {
         <div className="mt-6 grid gap-3 md:grid-cols-3">
           <div className={`${panel} md:col-span-2`}>
             <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-white/12 bg-white/5 px-3 py-1 text-xs font-extrabold text-white/80">
+                {trade.instrument ?? "—"}
+              </span>
               <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${sidePill(trade.tradeSide)}`}>
                 {trade.tradeSide}
               </span>
