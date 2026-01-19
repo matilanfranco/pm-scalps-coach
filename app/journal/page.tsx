@@ -351,6 +351,19 @@ export default function Page() {
 
   const [instrument, setInstrument] = useState<Instrument>("NQ");
 
+  const [showMotivation, setShowMotivation] = useState(true);
+
+  const motivationText = useMemo(() => {
+    const msgs = [
+      "¿Hoy vas a trabajar como trader? ¿Vas a usar el día de hoy para trabajar en vos mismo como trader mas allá del resultado del día?",
+      "El resultado de hoy no importa tanto como la persona que estás formando. Un buen trade es el que respeta el plan, no el que gana.",
+      "¿Estás acá para ganar hoy o para volverte consistente a largo plazo? Hoy entrenás disciplina. El dinero es consecuencia.",
+      "Cada trade es información. ¿Vas a usarla o a reaccionar?",
+      "Hoy no se mide en RR, se mide en disciplina. El mercado no te debe nada. Tu proceso sí.",
+    ];
+    return msgs[Math.floor(Math.random() * msgs.length)];
+  }, []);
+
   // ✅ “mounted” gate
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -998,7 +1011,52 @@ const invalidationGuide = useMemo<InvalidationGuide>(() => {
   : null;
 
   return (
+    
     <div className="min-h-screen bg-neutral-950 text-white">
+      {showMotivation && (
+    <div className="
+        fixed inset-0 z-50 flex items-center justify-center
+        bg-black/70
+        backdrop-blur-sm
+        animate-fade-in
+        `bg-linear-to-b from-black/60 to-black/80
+      ">
+      <div className="
+        max-w-xl mx-4 rounded-3xl
+        border border-white/15
+        bg-white/5
+        p-6 shadow-2xl
+        animate-scale-in
+      ">
+        
+        {/* glow suave */}
+        <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-white/10 shadow-[0_0_80px_rgba(255,255,255,0.06)]" />
+
+        <div className="relative text-center">
+          <div className="text-[11px] font-extrabold tracking-[0.28em] text-white/50">
+            PM SCALPS COACH · BIENVENIDO
+          </div>
+
+          <div className="mt-5 text-2xl md:text-3xl font-black leading-tight text-white">
+            {motivationText}
+          </div>
+
+          <div className="mt-3 text-sm text-white/55">
+            Respirá. Observá. Ejecutá si hace falta.
+          </div>
+
+          <button
+            onClick={() => setShowMotivation(false)}
+            className="mt-8 h-11 w-full cursor-pointer rounded-full px-6 text-sm font-extrabold
+                       bg-white text-black hover:bg-white/90 transition
+                       shadow-[0_10px_30px_rgba(255,255,255,0.15)]"
+          >
+            INICIAR EL DÍA DE TRADING →
+          </button>
+        </div>
+      </div>
+    </div>
+  )}
 
       <div className="mx-auto max-w-5xl px-4 py-6 ">
  
