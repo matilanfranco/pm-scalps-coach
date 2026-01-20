@@ -360,6 +360,7 @@ export default function Page() {
       "¿Estás acá para ganar hoy o para volverte consistente a largo plazo? Hoy entrenás disciplina. El dinero es consecuencia.",
       "Cada trade es información. ¿Vas a usarla o a reaccionar?",
       "Hoy no se mide en RR, se mide en disciplina. El mercado no te debe nada. Tu proceso sí.",
+      "En el mercado solo se puede hacer tres cosas. Comprar, vender o esperar",
     ];
     return msgs[Math.floor(Math.random() * msgs.length)];
   }, []);
@@ -1042,7 +1043,7 @@ const invalidationGuide = useMemo<InvalidationGuide>(() => {
           </div>
 
           <div className="mt-3 text-sm text-white/55">
-            Respirá. Observá. Ejecutá si hace falta.
+            Respira. Observa. Reacciona.
           </div>
 
           <button
