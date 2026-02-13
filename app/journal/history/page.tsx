@@ -72,26 +72,16 @@ function formatYMD(ms: number) {
   return new Date(ms).toISOString().slice(0, 10); // "YYYY-MM-DD"
 }
 
-// function levelLabel(l: Level) {
-//   switch (l) {
-//     case "PDH":
-//       return "PDH";
-//     case "PDL":
-//       return "PDL";
-//     case "ASIA_H":
-//       return "Asia High";
-//     case "ASIA_L":
-//       return "Asia Low";
-//     case "LONDON_H":
-//       return "London High";
-//     case "LONDON_L":
-//       return "London Low";
-//     case "WEEKLY_H":
-//       return "Weekly High";
-//     case "WEEKLY_L":
-//       return "Weekly Low";
-//   }
-// }
+function weekdayLabelFromMs(ms: number) {
+  const d = new Date(ms).getDay(); // 0 dom .. 6 sáb
+  if (d === 1) return "Lunes";
+  if (d === 2) return "Martes";
+  if (d === 3) return "Miércoles";
+  if (d === 4) return "Jueves";
+  if (d === 5) return "Viernes";
+  if (d === 6) return "Sábado";
+  return "Domingo";
+}
 
 type OutcomeKey = "all" | "win" | "loss" | "be" | "unknown";
 
@@ -359,7 +349,11 @@ export default function HistoryPage() {
   const isMobile = useIsMobile();
 
   // ✅ no returns antes de hooks
-  const supabase = useMemo(() => getSupabaseClient(), []);
+  const [supabase, setSupabase] = useState<ReturnType<typeof getSupabaseClient> | null>(null);
+
+  useEffect(() => {
+    setSupabase(getSupabaseClient());
+  }, []);
 
   const [allTrades, setAllTrades] = useState<TradeEntry[]>([]);
 
@@ -489,7 +483,7 @@ export default function HistoryPage() {
       return true;
     });
 
-    base.sort((a, b) => a.createdAt - b.createdAt); // oldest -> newest
+    base.sort((a, b) => b.createdAt - a.createdAt); // newest -> oldest
     return base;
   }, [allTrades, fOutcome, fSide, fPlan, fSetup, fBias, fState, fTarget, fWeekday, from, to, q]);
 
@@ -581,8 +575,14 @@ export default function HistoryPage() {
 }
 
   if (!supabase) {
-    return <div className="min-h-screen bg-neutral-950 text-white p-6">Supabase no configurado.</div>;
-  }
+      return (
+        <div className="min-h-screen bg-neutral-950 text-white">
+          <div className="mx-auto max-w-6xl px-4 py-8">
+            Cargando…
+          </div>
+        </div>
+      );
+    }
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white">
@@ -837,8 +837,9 @@ export default function HistoryPage() {
                 <thead>
                   <tr className="text-xs font-extrabold text-white/55">
                     <th className="py-3 pr-4">#</th>
-                    <th className="py-3 pr-4">Día</th>
-                    <th className="py-3 pr-4">Hora</th>
+                    <th className="py-3 pr-4">FECHA</th>
+                    <th className="py-3 pr-4">DÍA</th>
+                    <th className="py-3 pr-4">HORA</th>
                     <th className="py-3 pr-4">Instrumento</th>
                     <th className="py-3 pr-4">Dirección</th>
                     <th className="py-3 pr-4">Resultado</th>
@@ -846,7 +847,6 @@ export default function HistoryPage() {
                     <th className="py-3 pr-4">Plan</th>
                     <th className="py-3 pr-4">Setup</th>
                     <th className="py-3 pr-4">Bias</th>
-                    <th className="py-3 pr-4">Estado del mercado</th>
                     <th className="py-3 pr-2 text-right">🗑</th>
                   </tr>
                 </thead>
@@ -882,8 +882,8 @@ export default function HistoryPage() {
                           </td>
 
                           <td className="py-3 pr-4 text-white/85">{d}</td>
+                          <td className="py-3 pr-4 text-white/85">{weekdayLabelFromMs(t.createdAt)}</td>
                           <td className="py-3 pr-4 text-white/85">{t.tradeTime || "—"}</td>
-
                           <td className="py-3 pr-4 font-extrabold text-white/90">{t.instrument}</td>
 
                           <td className="py-3 pr-4">
@@ -919,20 +919,7 @@ export default function HistoryPage() {
 
                           <td className="py-3 pr-4">
                             {chip(t.biasShown, t.biasShown === "LONG" ? "good" : t.biasShown === "SHORT" ? "danger" : "muted")}
-                          </td>
-
-                          <td className="py-3 pr-4">
-                            {chip(
-                              t.marketState,
-                              t.marketState === "EXPANSION"
-                                ? "good"
-                                : t.marketState === "TRANSITION"
-                                ? "danger"
-                                : t.marketState === "DELIVERY_CONDITIONAL"
-                                ? "warn"
-                                : "muted"
-                            )}
-                          </td>
+                          </td>           
                           <td className="py-3 pr-2 text-right">
                             <button
                               type="button"
