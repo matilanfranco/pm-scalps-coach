@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabaseClient";
-import { listTradesSince, deleteTrade } from "@/lib/tradesDb";
+import { listTradesSince, deleteTrade, updateTrade } from "@/lib/tradesDb";
 
 type Level =
   | "PDH"
@@ -332,6 +333,8 @@ function chip(s: string, variant: "muted" | "good" | "danger" | "warn" = "muted"
   return <span className={`${base} ${cls}`}>{s}</span>;
 }
 
+
+
 type Weekday = "ALL" | "Lunes" | "Martes" | "Miércoles" | "Jueves" | "Viernes";
 
 function weekdayEsFromMs(ms: number): Weekday {
@@ -367,6 +370,20 @@ export default function HistoryPage() {
   const [fTarget, setFTarget] = useState<"all" | TargetTag>("all");
   const [fWeekday, setFWeekday] = useState<Weekday>("ALL");
 
+  const [editTrade, setEditTrade] = useState<TradeEntry | null>(null);
+
+  // campos del form de edición
+  const [editDate, setEditDate] = useState("");
+  const [editTime, setEditTime] = useState("");
+  const [editSide, setEditSide] = useState<TradeSide>("BUY");
+  const [editFollowed, setEditFollowed] = useState<FollowedPlan>("yes");
+  const [editRR, setEditRR] = useState("");
+  const [editOutcome, setEditOutcome] = useState<OutcomeDb>("unknown");
+  const [editSetup, setEditSetup] = useState<string>("unknown");
+  const [editNote, setEditNote] = useState("");
+  const [editInstrument, setEditInstrument] = useState<Instrument>("NQ");
+  const [editSaving, setEditSaving] = useState(false);
+
   const [from, setFrom] = useState<string>("");
   const [to, setTo] = useState<string>("");
   const [q, setQ] = useState("");
@@ -377,62 +394,49 @@ export default function HistoryPage() {
   const [userId, setUserId] = useState<string | null>(null);
 
   const LS_KEY = "trades_cache_v1";
-  const LS_LAST = "trades_lastFetchedAt_v1";
 
   useEffect(() => {
     if (!supabase) return;
     let alive = true;
 
-    // 1) render rápido desde cache
-    const cached = localStorage.getItem(LS_KEY);
-    if (cached) {
-      try {
+    // render rápido desde cache
+    try {
+      const cached = localStorage.getItem(LS_KEY);
+      if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) setAllTrades(parsed);
-      } catch {}
-    }
+        if (Array.isArray(parsed)) setAllTrades(parsed as TradeEntry[]);
+      }
+    } catch {}
 
     (async () => {
       try {
         const { data } = await supabase.auth.getSession();
         const uid = data.session?.user?.id;
         if (!uid) return;
-        setUserId(uid);
+        if (alive) setUserId(uid);
 
-        const userId = uid;
-
-        const last = Number(localStorage.getItem(LS_LAST) || "0") || 0;
-
-        // 2) traer SOLO nuevos
-        const newTrades = await listTradesSince(userId, last, 500);
-
+        // ✅ siempre traemos todo — sin LS_LAST
+        const fromDb = await listTradesSince(uid, 0, 500);
         if (!alive) return;
 
-        // 3) merge por id (evita duplicados)
-        setAllTrades((prev) => {
-          const map = new Map<string, any>();
-          [...newTrades, ...prev].forEach((t) => map.set(t.id, t));
+        const normalized = fromDb
+          .map((t) => ({
+            ...t,
+            instrument:
+              t.instrument === "ES" || t.instrument === "NQ"
+                ? t.instrument
+                : "ES",
+          }))
+          .sort((a, b) => a.createdAt - b.createdAt);
 
-          // ✅ aseguramos instrument default si alguno viene sin eso
-          const merged = Array.from(map.values())
-            .map((t) => ({ ...t, instrument: (t.instrument === "ES" || t.instrument === "NQ") ? t.instrument : "ES" }))
-            .sort((a, b) => a.createdAt - b.createdAt);
-
-          localStorage.setItem(LS_KEY, JSON.stringify(merged));
-
-          const newest = merged[merged.length - 1]?.createdAt ?? last;
-          localStorage.setItem(LS_LAST, String(newest));
-
-          return merged;
-        });
+        setAllTrades(normalized);
+        localStorage.setItem(LS_KEY, JSON.stringify(normalized));
       } catch (e) {
         console.error("History load failed:", e);
       }
     })();
 
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [supabase]);
 
   useEffect(() => {
@@ -541,7 +545,85 @@ export default function HistoryPage() {
     setPage(1);
   }
 
-  async function handleDeleteTrade(e: React.MouseEvent, t: TradeEntry) {
+  function openEdit(t: TradeEntry) {
+  setEditTrade(t);
+  setEditDate(formatYMD(t.createdAt));
+  setEditTime(t.tradeTime || "");
+  setEditSide(t.tradeSide);
+  setEditFollowed(t.followedPlan);
+  setEditRR(t.rr != null ? String(t.rr) : "");
+  setEditOutcome(normalizeOutcome((t as any).outcome));
+  setEditSetup(t.setupTag ?? "unknown");
+  setEditNote(t.note ?? "");
+  setEditInstrument(t.instrument ?? "NQ");
+}
+
+async function saveEdit() {
+  if (!editTrade) return;
+  setEditSaving(true);
+
+  try {
+    // construir nuevo createdAt desde la fecha editada
+    const buildTs = (): number => {
+      if (!editDate) return editTrade.createdAt;
+      const [y, m, d] = editDate.split("-").map(Number);
+      const dt = new Date(y, m - 1, d, 12, 0, 0, 0);
+      if (editTime && /^([01]\d|2[0-3]):([0-5]\d)$/.test(editTime)) {
+        const [hh, mm] = editTime.split(":").map(Number);
+        dt.setHours(hh, mm, 0, 0);
+      }
+      return dt.getTime();
+    };
+
+    const rrVal = (() => {
+      const n = Number(String(editRR).replace(",", "."));
+      return Number.isFinite(n) ? n : null;
+    })();
+
+    await updateTrade(editTrade.id, {
+      createdAt: buildTs(),
+      tradeTime: editTime,
+      tradeSide: editSide,
+      followedPlan: editFollowed,
+      rr: rrVal,
+      outcome: editOutcome,
+      setupTag: editSetup,
+      note: editNote,
+      instrument: editInstrument,
+    });
+
+    // actualizar local state
+    setAllTrades((prev) => {
+      const next = prev.map((t) =>
+        t.id !== editTrade.id
+          ? t
+          : {
+              ...t,
+              createdAt: buildTs(),
+              tradeTime: editTime,
+              tradeSide: editSide,
+              followedPlan: editFollowed,
+              rr: rrVal,
+              outcome: editOutcome,
+              setupTag: editSetup as any,
+              note: editNote,
+              instrument: editInstrument,
+            }
+      );
+      localStorage.setItem(LS_KEY, JSON.stringify(next));
+      return next;
+    });
+
+    setEditTrade(null);
+  } catch (err) {
+    console.error("updateTrade failed:", err);
+    alert("No se pudo guardar.");
+  } finally {
+    setEditSaving(false);
+  }
+}
+
+async function handleDeleteTrade(e: React.MouseEvent, t: TradeEntry) {
   e.stopPropagation();
 
   if (!userId) {
@@ -557,15 +639,9 @@ export default function HistoryPage() {
   try {
     await deleteTrade(userId, t.id);
 
-    // ✅ sacarlo del state
     setAllTrades((prev) => {
       const next = prev.filter((x) => x.id !== t.id);
       localStorage.setItem(LS_KEY, JSON.stringify(next));
-
-      // ✅ recomputar LS_LAST (el más nuevo que queda)
-      const newest = next[next.length - 1]?.createdAt ?? 0;
-      localStorage.setItem(LS_LAST, String(newest));
-
       return next;
     });
   } catch (err) {
@@ -765,10 +841,10 @@ export default function HistoryPage() {
                   const oc = outcomeBadge(t);
 
                   return (
-                    <button
+                    <div
                       key={t.id}
                       onClick={() => router.push(`/journal/history/${t.id}`)}
-                      className="relative text-left rounded-2xl border border-white/10 bg-white/3 p-4 active:scale-[0.99] transition"
+                      className="relative text-left rounded-2xl border border-white/10 bg-white/3 p-4 active:scale-[0.99] transition cursor-pointer"
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-xs font-extrabold text-white/50">
@@ -811,22 +887,31 @@ export default function HistoryPage() {
                             : "muted"
                         )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={(e) => handleDeleteTrade(e, t)}
-                        className="absolute top-3 right-3 h-8 w-8 rounded-full border border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white transition"
-                        title="Borrar trade"
-                        aria-label="Borrar trade"
-                      >
-                        ✕
-                      </button>
+                      <div className="absolute top-3 right-3 flex gap-1">
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); openEdit(t); }}
+                          className="h-8 w-8 rounded-full border border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white transition"
+                          title="Editar trade"
+                        >
+                          ✎
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteTrade(e, t)}
+                          className="h-8 w-8 rounded-full border border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white transition"
+                          title="Borrar trade"
+                        >
+                          ✕
+                        </button>
+                      </div>
 
                       {t.note?.trim() ? (
                         <div className="mt-3 text-sm text-white/70 line-clamp-2">{t.note.trim()}</div>
                       ) : (
                         <div className="mt-3 text-sm text-white/40">Sin nota.</div>
                       )}
-                    </button>
+                    </div>
                   );
                 })
               )}
@@ -919,8 +1004,17 @@ export default function HistoryPage() {
 
                           <td className="py-3 pr-4">
                             {chip(t.biasShown, t.biasShown === "LONG" ? "good" : t.biasShown === "SHORT" ? "danger" : "muted")}
-                          </td>           
+                          </td> 
+                                    
                           <td className="py-3 pr-2 text-right">
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); openEdit(t); }}
+                              className="h-8 w-8 rounded-full border border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white transition mr-1"
+                              title="Editar trade"
+                            >
+                              ✎
+                            </button>
                             <button
                               type="button"
                               onClick={(e) => handleDeleteTrade(e, t)}
@@ -966,6 +1060,156 @@ export default function HistoryPage() {
           </div>
         </div>
       </div>
+      {/* ── MODAL EDITAR TRADE ── */}
+      {editTrade && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg rounded-3xl border border-white/15 bg-neutral-900 p-6 shadow-2xl">
+            <div className="text-lg font-black">Editar trade</div>
+            <div className="mt-1 text-xs text-white/50">{editTrade.id.slice(0, 8)}…</div>
+
+            <div className="mt-5 grid gap-4">
+              {/* Fecha */}
+              <div>
+                <div className="text-xs font-extrabold text-white/60 mb-1">Fecha</div>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={(e) => setEditDate(e.target.value)}
+                  className="h-10 w-full rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none"
+                />
+              </div>
+
+              {/* Hora */}
+              <div>
+                <div className="text-xs font-extrabold text-white/60 mb-1">Hora (HH:MM)</div>
+                <input
+                  value={editTime}
+                  onChange={(e) => setEditTime(e.target.value)}
+                  placeholder="HH:MM"
+                  className="h-10 w-32 rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none"
+                />
+              </div>
+
+              {/* Instrumento + Side */}
+              <div className="flex flex-wrap gap-3">
+                <div>
+                  <div className="text-xs font-extrabold text-white/60 mb-1">Instrumento</div>
+                  <div className="flex gap-2">
+                    {(["NQ", "ES"] as Instrument[]).map((ins) => (
+                      <button
+                        key={ins}
+                        onClick={() => setEditInstrument(ins)}
+                        className={`h-9 rounded-xl border px-4 text-sm font-extrabold transition ${editInstrument === ins ? "border-white/30 bg-white/10 text-white" : "border-white/15 bg-white/5 text-white/70"}`}
+                      >
+                        {ins}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs font-extrabold text-white/60 mb-1">Dirección</div>
+                  <div className="flex gap-2">
+                    {(["BUY", "SELL"] as TradeSide[]).map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setEditSide(s)}
+                        className={`h-9 rounded-xl border px-4 text-sm font-extrabold transition ${editSide === s ? "border-white/30 bg-white/10 text-white" : "border-white/15 bg-white/5 text-white/70"}`}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Resultado + Plan */}
+              <div className="flex flex-wrap gap-3">
+                <div>
+                  <div className="text-xs font-extrabold text-white/60 mb-1">Resultado</div>
+                  <select
+                    value={editOutcome}
+                    onChange={(e) => setEditOutcome(e.target.value as OutcomeDb)}
+                    className="h-9 rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none"
+                  >
+                    <option value="unknown">—</option>
+                    <option value="win">Win</option>
+                    <option value="loss">Loss</option>
+                    <option value="be">BE</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className="text-xs font-extrabold text-white/60 mb-1">RR</div>
+                  <input
+                    value={editRR}
+                    onChange={(e) => setEditRR(e.target.value)}
+                    placeholder="ej: 2.5"
+                    className="h-9 w-24 rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none"
+                  />
+                </div>
+
+                <div>
+                  <div className="text-xs font-extrabold text-white/60 mb-1">Setup</div>
+                  <select
+                    value={editSetup}
+                    onChange={(e) => setEditSetup(e.target.value)}
+                    className="h-9 rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none"
+                  >
+                    <option value="unknown">—</option>
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className="text-xs font-extrabold text-white/60 mb-1">Plan</div>
+                  <div className="flex gap-2">
+                    {(["yes", "no"] as FollowedPlan[]).map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => setEditFollowed(p)}
+                        className={`h-9 rounded-xl border px-4 text-sm font-extrabold transition ${editFollowed === p ? "border-white/30 bg-white/10 text-white" : "border-white/15 bg-white/5 text-white/70"}`}
+                      >
+                        {p === "yes" ? "Cumplí" : "No cumplí"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              
+
+              {/* Nota */}
+              <div>
+                <div className="text-xs font-extrabold text-white/60 mb-1">Nota</div>
+                <textarea
+                  value={editNote}
+                  onChange={(e) => setEditNote(e.target.value)}
+                  rows={3}
+                  className="w-full resize-y rounded-xl border border-white/15 bg-white/5 p-3 text-sm text-white outline-none placeholder:text-white/40"
+                />
+              </div>
+            </div>
+
+            {/* Botones */}
+            <div className="mt-5 flex gap-3">
+              <button
+                onClick={saveEdit}
+                disabled={editSaving}
+                className="h-11 flex-1 rounded-xl border border-white/20 bg-white/10 text-sm font-extrabold text-white hover:bg-white/15 transition disabled:opacity-50"
+              >
+                {editSaving ? "Guardando…" : "Guardar cambios"}
+              </button>
+              <button
+                onClick={() => setEditTrade(null)}
+                className="h-11 rounded-xl border border-white/15 bg-white/5 px-4 text-sm font-extrabold text-white/70 hover:bg-white/10 transition"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

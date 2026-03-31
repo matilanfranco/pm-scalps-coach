@@ -1,476 +1,276 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { getTradeById } from "@/lib/tradesDb";
 
-type Level =
-  | "PDH"
-  | "PDL"
-  | "ASIA_H"
-  | "ASIA_L"
-  | "LONDON_H"
-  | "LONDON_L"
-  | "WEEKLY_H"
-  | "WEEKLY_L";
+import type { TradeEntry } from "@/lib/types";
+import {
+  formatYMD,
+  weekdayLabel,
+  outcomeBadge,
+  tonePill,
+  sidePill,
+  rrTone,
+  toneToClasses,
+  normalizeOutcome,
+} from "@/lib/helpers";
 
-type Instrument = "ES" | "NQ";
-
-type Reaction = "accept" | "absorb" | "unclear";
-type MarketState =
-  | "EXPANSION"
-  | "DELIVERY_CONDITIONAL"
-  | "TRANSITION"
-  | "REVERSAL_CONFIRMED"
-  | "CHOP_NO_TRADE"
-  | "WAIT";
-
-type InvalidationChoice = "micro_m5" | "shift_m15" | "ifvg";
-type SetupTag = "A" | "B" | "unknown";
-type TargetTag = Level | "HTF" | "NONE";
-type TradeSide = "BUY" | "SELL";
-type FollowedPlan = "yes" | "no";
-
-type TradeEntry = {
-  id: string;
-  createdAt: number;
-
-  instrument: Instrument;
-
-  liqTaken: "yes" | "no" | "unknown";
-  takenLevels: Level[];
-  lastTaken: Level | null;
-  reaction: Reaction;
-  pendingLevels: Level[];
-  hasFvg: "yes" | "no" | "skip";
-
-  biasShown: "LONG" | "SHORT" | "WAIT" | "NO TRADE";
-  marketState: MarketState;
-  invalidationHappened: "yes" | "no" | "unknown";
-  invalidationChoice: InvalidationChoice | null;
-  suggestedTargets: Level[];
-
-  helped: boolean;
-
-  tradeTaken: "yes" | "no";
-  tradeTime: string; // HH:MM
-  tradeSide: TradeSide;
-  followedPlan: FollowedPlan;
-  rr: number | null;
-  setupTag: SetupTag;
-  targetTag: TargetTag;
-
-  note: string;
-};
-
-function levelLabel(l: Level) {
-  switch (l) {
-    case "PDH":
-      return "PDH";
-    case "PDL":
-      return "PDL";
-    case "ASIA_H":
-      return "Asia High";
-    case "ASIA_L":
-      return "Asia Low";
-    case "LONDON_H":
-      return "London High";
-    case "LONDON_L":
-      return "London Low";
-    case "WEEKLY_H":
-      return "Weekly High";
-    case "WEEKLY_L":
-      return "Weekly Low";
-  }
+function chip(s: string, variant: "muted" | "good" | "danger" | "warn" = "muted") {
+  const base = "rounded-full border px-3 py-1 text-xs font-extrabold whitespace-nowrap";
+  return <span className={`${base} ${tonePill(variant)}`}>{s}</span>;
 }
 
-function tonePill(tone: "good" | "danger" | "warn" | "muted") {
-  switch (tone) {
-    case "good":
-      return "border-emerald-400/30 bg-emerald-500/10 text-emerald-100 shadow-[0_0_0_1px_rgba(16,185,129,0.12)]";
-    case "danger":
-      return "border-red-400/30 bg-red-500/10 text-red-100 shadow-[0_0_0_1px_rgba(248,113,113,0.12)]";
-    case "warn":
-      return "border-amber-400/30 bg-amber-500/10 text-amber-100 shadow-[0_0_0_1px_rgba(251,191,36,0.10)]";
-    default:
-      return "border-white/12 bg-white/5 text-white/75";
-  }
-}
-
-function sidePill(side: TradeSide) {
-  return side === "BUY"
-    ? "border-sky-400/30 bg-sky-500/10 text-sky-100 shadow-[0_0_0_1px_rgba(56,189,248,0.10)]"
-    : "border-fuchsia-400/30 bg-fuchsia-500/10 text-fuchsia-100 shadow-[0_0_0_1px_rgba(232,121,249,0.10)]";
-}
-
-function chip(text: string, tone: "good" | "danger" | "warn" | "muted" = "muted") {
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${tonePill(tone)}`}>
-      {text}
-    </span>
+    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-4">
+      <div className="w-40 shrink-0 text-xs font-extrabold text-white/50 uppercase tracking-wide pt-0.5">
+        {label}
+      </div>
+      <div className="text-sm text-white/90">{children}</div>
+    </div>
   );
 }
 
-function rrTone(rr: number | null) {
-  if (rr == null) return "muted" as const;
-  if (rr > 0) return "good" as const;
-  if (rr < 0) return "danger" as const;
-  return "warn" as const;
-}
-
-function outcomeText(rr: number | null) {
-  if (rr == null) return "— No RR";
-  if (rr > 0) return "✅ Win";
-  if (rr < 0) return "❌ Loss";
-  return "◻︎ BE";
-}
-
-function stateTone(s: MarketState) {
-  if (s === "EXPANSION") return "good" as const;
-  if (s === "DELIVERY_CONDITIONAL") return "warn" as const;
-  if (s === "TRANSITION" || s === "REVERSAL_CONFIRMED") return "danger" as const;
-  return "muted" as const;
-}
-
-function biasTone(b: TradeEntry["biasShown"]) {
-  if (b === "LONG") return "good" as const;
-  if (b === "SHORT") return "danger" as const;
-  return "muted" as const;
-}
-
 export default function TradeDetailPage() {
+  const params = useParams();
   const router = useRouter();
-  const params = useParams<{ id: string }>();
-  const id = params?.id;
+  const id = params?.id as string;
 
   const [trade, setTrade] = useState<TradeEntry | null>(null);
-  const [status, setStatus] = useState<"loading" | "ok" | "notfound">("loading");
-  const [openImg, setOpenImg] = useState<string | null>(null);
-  const [imgUrl, setImgUrl] = useState<string>("");
-  
-  const supabase = getSupabaseClient();
-  if (!supabase) return;
-  
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-        if (e.key === "Escape") setOpenImg(null);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    }, []);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-  let alive = true;
-
-  (async () => {
     if (!id) return;
 
-    try {
-      const { data, error } = await supabase.auth.getSession();
-      if (error) throw error;
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
 
-      const session = data.session;
-      if (!session?.user?.id) {
-        router.push("/login");
-        return;
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const uid = data.session?.user?.id;
+        if (!uid) { router.replace("/login"); return; }
+
+        const t = await getTradeById(uid, id);
+        if (!t) { setError("Trade no encontrado."); return; }
+
+        setTrade(t as TradeEntry);
+      } catch (e) {
+        console.error(e);
+        setError("Error al cargar el trade.");
+      } finally {
+        setLoading(false);
       }
+    })();
+  }, [id, router]);
 
-      const userId = session.user.id;
+  const panel = "rounded-2xl border border-white/10 bg-white/[0.04] p-5 shadow-[0_18px_40px_rgba(0,0,0,0.45)]";
 
-      const row = await getTradeById(userId, String(id));
-      if (!alive) return;
-
-      if (row && row.tradeTaken === "yes") {
-        setTrade(row as any);
-        setStatus("ok");
-
-        // ✅ sacar hardcode: usar la url del trade si existe
-        setImgUrl(row.imgUrl ?? "");
-      } else {
-        setTrade(null);
-        setStatus("notfound");
-      }
-    } catch (e) {
-      console.error("Trade detail Supabase load failed:", e);
-      if (!alive) return;
-      setTrade(null);
-      setStatus("notfound");
-    }
-  })();
-
-  return () => {
-    alive = false;
-  };
-}, [id, router]);
-
-  const day = useMemo(() => (trade ? new Date(trade.createdAt).toLocaleDateString() : "—"), [trade]);
-
-  const kpiRR = useMemo(() => {
-    if (!trade) return { rrText: "—", rrTone: "muted" as const, outcome: "—" };
-    const rr = trade.rr;
-    return {
-      rrText: rr == null ? "—" : rr.toFixed(2),
-      rrTone: rrTone(rr),
-      outcome: outcomeText(rr),
-    };
-  }, [trade]);
-
-  // UI
-  const panel =
-    "rounded-2xl border border-white/10 bg-white/4 backdrop-blur-xl p-4 shadow-[0_18px_40px_rgba(0,0,0,0.45)]";
-  const btn =
-    "h-10 rounded-full border border-white/12 inline-flex items-center cursor-pointer  bg-white/3 px-4 text-sm font-extrabold text-white/80 hover:bg-white/[0.06] hover:border-white/20 transition";
-
-  if (status === "loading") {
+  if (loading) {
     return (
       <div className="min-h-screen bg-neutral-950 text-white">
-        <div className="mx-auto max-w-5xl px-4 py-8">
-          <div className="text-sm text-white/70">Cargando…</div>
+        <div className="mx-auto max-w-3xl px-4 py-8 text-white/60">Cargando…</div>
+      </div>
+    );
+  }
+
+  if (error || !trade) {
+    return (
+      <div className="min-h-screen bg-neutral-950 text-white">
+        <div className="mx-auto max-w-3xl px-4 py-8">
+          <div className="text-red-300">{error ?? "Trade no encontrado."}</div>
+          <button
+            onClick={() => router.push("/journal/history")}
+            className="mt-4 h-10 rounded-xl border border-white/15 bg-white/5 px-4 text-sm font-extrabold text-white hover:bg-white/10 transition"
+          >
+            ← Volver al historial
+          </button>
         </div>
       </div>
     );
   }
 
-  if (status === "notfound") {
-    return (
-      <div className="min-h-screen bg-neutral-950 text-white">
-        <div className="mx-auto max-w-5xl px-4 py-8">
-          <div className={panel}>
-            <div className="text-xs font-extrabold tracking-[0.18em] text-white/55">JOURNAL</div>
-            <h1 className="mt-2 text-2xl font-black">Trade no encontrado</h1>
-
-            <div className="mt-3 text-sm text-white/70">
-              No hay trade con ese id.
-            </div>
-
-            <div className="mt-4 flex gap-2">
-              <Link href="/journal/history" className={btn}>
-                ← Volver a History
-              </Link>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!trade) return null;
+  const oc = outcomeBadge(trade);
+  const outcome = normalizeOutcome(trade.outcome);
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white">
-     
-      <div className="mx-auto max-w-5xl px-4 py-8">
-        {/* Top bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <div className="text-xs font-extrabold tracking-[0.18em] text-white/55">TRADE DETAIL</div>
-            <div className="mt-2 text-xl text-white/65">
-              Día <b className="text-white/90">{day}</b> · Hora{" "}
-              <b className="text-white/90">{trade.tradeTime || "—"}</b>
-            </div>
-          </div>
+      <div className="mx-auto max-w-3xl px-4 py-8">
 
-          <div className="flex flex-wrap gap-2">
-            <Link href="/journal/history" className={btn}>
-              ← History
-            </Link>
-            <button onClick={() => router.back()} className={btn} title="Volver">
-              Back
-            </button>
-          </div>
+        {/* ── Breadcrumb ── */}
+        <button
+          onClick={() => router.push("/journal/history")}
+          className="text-xs font-extrabold text-white/50 hover:text-white/80 transition"
+        >
+          ← Historial
+        </button>
+
+        {/* ── Título ── */}
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-black">
+            {weekdayLabel(trade.createdAt)} {formatYMD(trade.createdAt)}
+          </h1>
+          {trade.tradeTime && (
+            <span className="text-sm font-extrabold text-white/50">{trade.tradeTime}</span>
+          )}
+          <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${tonePill(oc.tone)}`}>
+            {oc.text}
+          </span>
+          {trade.tradeTaken === "yes" && (
+            <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${sidePill(trade.tradeSide)}`}>
+              {trade.tradeSide}
+            </span>
+          )}
         </div>
 
-        {/* Hero card */}
-        <div className="mt-6 grid gap-3 md:grid-cols-3">
-          <div className={`${panel} md:col-span-2`}>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full border border-white/12 bg-white/5 px-3 py-1 text-xs font-extrabold text-white/80">
-                {trade.instrument ?? "—"}
-              </span>
-              <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${sidePill(trade.tradeSide)}`}>
-                {trade.tradeSide}
-              </span>
+        {/* ── Imagen ── */}
+        {trade.imgUrl && (
+          <div className="mt-6">
+            <img
+              src={trade.imgUrl}
+              alt="Chart"
+              className="rounded-2xl border border-white/10 w-full max-h-[500px] object-contain bg-black/30"
+            />
+          </div>
+        )}
 
-              {chip(kpiRR.outcome, kpiRR.rrTone)}
-              {chip(`RR ${kpiRR.rrText}`, kpiRR.rrTone)}
-
-              {trade.followedPlan === "yes" ? chip("Plan: sí", "good") : chip("Plan: no", "danger")}
-              {trade.setupTag !== "unknown"
-                ? chip(`Setup ${trade.setupTag}`, trade.setupTag === "A" ? "good" : "warn")
-                : chip("Setup —", "muted")}
-              {/* {chip(`Target: ${String(trade.targetTag)}`, "muted")} */}
-            </div>
-
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <div className="rounded-2xl border border-white/10 bg-white/3 p-4">
-                <div className="text-xs font-extrabold text-white/55">BIAS / DIRECCIÓN DEL PRECIO</div>
-                <div className="mt-2">{chip(trade.biasShown, biasTone(trade.biasShown))}</div>
-                <div className="mt-3 text-xs font-extrabold text-white/55">ESTADO DEL MERCADO</div>
-                <div className="mt-2">{chip(trade.marketState, stateTone(trade.marketState))}</div>
-              </div>
-
-              <div className="rounded-2xl border border-white/10 bg-white/3 p-4">
-                <div className="text-xs font-extrabold text-white/55">¿FUÉ LA APP DE AYUDA?</div>
-                <div className="mt-2">
-                  {trade.helped ? chip("Sí", "good") : chip("No", "danger")}
+        {/* ── Trade info ── */}
+        {trade.tradeTaken === "yes" && (
+          <div className={`mt-6 ${panel}`}>
+            <div className="text-xs font-extrabold tracking-[0.16em] text-white/50 mb-4">TRADE</div>
+            <div className="grid gap-3">
+              <Row label="Instrumento">{trade.instrument}</Row>
+              <Row label="Dirección">
+                <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${sidePill(trade.tradeSide)}`}>
+                  {trade.tradeSide}
+                </span>
+              </Row>
+              <Row label="Resultado">
+                <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${tonePill(oc.tone)}`}>
+                  {oc.text}
+                </span>
+              </Row>
+              <Row label="RR">
+                <span className={`rounded-full border px-3 py-1 text-xs font-black ${tonePill(rrTone(trade.rr))}`}>
+                  {trade.rr == null ? "—" : trade.rr.toFixed(2)}
+                </span>
+              </Row>
+              {trade.partialRRs?.length ? (
+              <Row label="Parciales">
+                <div className="flex flex-wrap gap-2">
+                  {trade.partialRRs.map((rr, i) => (
+                    <span key={i} className="rounded-full border border-emerald-400/30 bg-emerald-500/10 text-emerald-100 px-3 py-1 text-xs font-black">
+                      TP{i + 1}: {rr}R
+                    </span>
+                  ))}
                 </div>
-
-                <div className="mt-3 text-xs font-extrabold text-white/55">¿MOVIMIENTO CON IMBALANCE?</div>
-                <div className="mt-2">
-                  {trade.hasFvg === "yes"
-                    ? chip("Sí, había FVG", "good")
-                    : trade.hasFvg === "no"
-                    ? chip("No, no hubo FVG", "danger")
-                    : chip("Skip", "muted")}
-                </div>
-              </div>
+              </Row>
+            ) : null}
+              <Row label="Setup">
+                {trade.setupTag === "A" ? chip("Setup A", "good")
+                  : trade.setupTag === "B" ? chip("Setup B", "warn")
+                  : chip("—")}
+              </Row>
+              <Row label="Siguió el plan">
+                {trade.followedPlan === "yes" ? chip("Sí ✓", "good") : chip("No ✗", "danger")}
+              </Row>
+              <Row label="App ayudó">
+                {trade.helped ? chip("Sí", "good") : chip("No", "muted")}
+              </Row>
             </div>
           </div>
+        )}
 
-          {/* Context quick */}
-          <div className={panel}>
-            <div className="text-xs font-extrabold tracking-[0.18em] text-white/55">CONTEXTO PREVIO</div>
+        {trade.tradeTaken === "no" && (
+          <div className={`mt-6 ${panel}`}>
+            <div className="text-sm text-white/60">No se tomó trade en esta sesión.</div>
+          </div>
+        )}
 
-            <div className="mt-4 text-sm text-white/80">
-              <div>
-                <span className="text-white/55">Última liquidez importante tomada antes del trade: </span>
-                <b className="text-white/90">{trade.lastTaken ? levelLabel(trade.lastTaken) : "—"}</b>
-              </div>
-
-              <div className="mt-2">
-                <span className="text-white/55">Aceptación / continuacion o absorción / reversal: </span>
-                <b className="text-white/90">{trade.reaction === "accept" ? "Aceptación." : trade.reaction === "absorb" ? "Absorción." : "Movimiento no claro."}</b>
-              </div>
-
-              <div className="mt-2">
-                <span className="text-white/55">Niveles pendientes / posibles targets:</span>{" "}
-                <b className="text-white/90">{trade.pendingLevels?.length ?? 0}</b>
-              </div>
-            </div>
-
-            {trade.pendingLevels?.length ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {trade.pendingLevels.map((l) => (
-                  <span key={l} className="rounded-full border border-white/10 bg-white/3 px-3 py-1 text-xs font-extrabold text-white/80">
-                    {levelLabel(l)}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <div className="mt-3 text-sm text-white/55">No marcaste liquidez pendiente.</div>
+        {/* ── Contexto de mercado ── */}
+        <div className={`mt-4 ${panel}`}>
+          <div className="text-xs font-extrabold tracking-[0.16em] text-white/50 mb-4">CONTEXTO</div>
+          <div className="grid gap-3">
+            <Row label="Bias">
+              {chip(
+                trade.biasShown,
+                trade.biasShown === "LONG" ? "good"
+                  : trade.biasShown === "SHORT" ? "danger"
+                  : "muted"
+              )}
+            </Row>
+            <Row label="Estado mercado">
+              {chip(
+                trade.marketState,
+                trade.marketState === "EXPANSION" ? "good"
+                  : trade.marketState === "TRANSITION" ? "danger"
+                  : trade.marketState === "DELIVERY_CONDITIONAL" ? "warn"
+                  : "muted"
+              )}
+            </Row>
+            <Row label="Liquidez tomada">
+              {chip(trade.liqTaken, trade.liqTaken === "yes" ? "good" : "muted")}
+            </Row>
+            {trade.lastTaken && (
+              <Row label="Última tomada">{trade.lastTaken}</Row>
+            )}
+            <Row label="Reacción">
+              {chip(
+                trade.reaction,
+                trade.reaction === "accept" ? "good"
+                  : trade.reaction === "absorb" ? "danger"
+                  : "muted"
+              )}
+            </Row>
+            <Row label="FVG">{chip(trade.hasFvg, trade.hasFvg === "yes" ? "good" : trade.hasFvg === "no" ? "danger" : "muted")}</Row>
+            {trade.invalidationHappened === "yes" && (
+              <Row label="Invalidación">
+                {chip(trade.invalidationKind ?? "—", "warn")}
+              </Row>
+            )}
+            {trade.takenLevels?.length > 0 && (
+              <Row label="Niveles tomados">
+                <div className="flex flex-wrap gap-1">
+                  {trade.takenLevels.map((l) => (
+                    <span key={l} className={`rounded-full border px-2 py-0.5 text-xs font-extrabold ${tonePill("muted")}`}>{l}</span>
+                  ))}
+                </div>
+              </Row>
+            )}
+            {trade.pendingLevels?.length > 0 && (
+              <Row label="Pendientes">
+                <div className="flex flex-wrap gap-1">
+                  {trade.pendingLevels.map((l) => (
+                    <span key={l} className={`rounded-full border px-2 py-0.5 text-xs font-extrabold ${tonePill("muted")}`}>{l}</span>
+                  ))}
+                </div>
+              </Row>
             )}
           </div>
         </div>
 
-        {/* Deep detail */}
-        <div className="mt-6 grid gap-3 md:grid-cols-2">
-          {/* Chart preview */}
-            <div className={panel}>
-            <div className="text-xs font-extrabold tracking-[0.18em] text-white/55">GRÁFICO (PREVIEW)</div>
-
-            <div className="mt-4 rounded-2xl border border-white/10 bg-white/3 p-4">
-                <div className="aspect-video w-full overflow-hidden rounded-2xl border border-white/10 bg-white/3">
-                {/* Cuando tengas imágenes reales, reemplazá este src por el tuyo */}
-                {imgUrl ? (
-                    <button
-                        type="button"
-                        onClick={() => setOpenImg(imgUrl)}
-                        className="group w-full overflow-hidden rounded-2xl border border-white/10 bg-white/5 cursor-pointer"
-                        aria-label="Abrir imagen"
-                    >
-                        <img
-                        src={imgUrl}
-                        alt="Captura del trade"
-                        className="h-56 w-full object-cover transition group-hover:scale-[1.02]"
-                        />
-                        <div className="flex items-center justify-between px-4 py-3 text-xs text-white/70">
-                        <span>Click para agrandar</span>
-                        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">🔍</span>
-                        </div>
-                    </button>
-                    ) : (
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
-                        (Acá va la foto cuando la agregues)
-                    </div>
-                    )}
-                </div>
-            </div>
-            </div>          
-          {/* Manual note */}
-          <div className={panel}>
-            <div className="text-xs font-extrabold tracking-[0.18em] text-white/55">DESCRIPCIÓN DEL TRADE</div>
-
-            <div className="mt-4 rounded-2xl border border-white/10 bg-white/3 p-4">
-              {trade.note?.trim() ? (
-                <div className="whitespace-pre-wrap text-sm text-white/90">{trade.note.trim()}</div>
-              ) : (
-                <div className="text-sm text-white/55">Sin nota.</div>
-              )}
-            </div>
-
-            <div className="mt-4 rounded-2xl border border-white/10 bg-white/3 p-4">
-              <div className="text-xs font-extrabold text-white/55">Checklist rápido</div>
-              <div className="mt-3 grid gap-2 text-sm text-white/85">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-white/65">Trade dentro del plan?</div>
-                  {trade.followedPlan === "yes" ? chip("Sí", "good") : chip("No", "danger")}
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-white/65">Movimiento con FVG?</div>
-                  {trade.hasFvg === "yes" ? chip("Sí", "good") : trade.hasFvg === "no" ? chip("No", "danger") : chip("Skip", "muted")}
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-white/65">¿Me ayudó la app?</div>
-                  {trade.helped ? chip("Sí", "good") : chip("No", "danger")}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Link href="/journal/history" className={btn}>
-                ← Volver a lista
-              </Link>
-            </div>
+        {/* ── Nota ── */}
+        {trade.note?.trim() && (
+          <div className={`mt-4 ${panel}`}>
+            <div className="text-xs font-extrabold tracking-[0.16em] text-white/50 mb-3">NOTA</div>
+            <p className="text-sm text-white/85 whitespace-pre-wrap leading-relaxed">{trade.note.trim()}</p>
           </div>
-        </div>
-
-        {/* Footer hint */}
-        {/* <div className="mt-6 text-xs text-white/45">
-          Todo esto está leído desde <b>localStorage</b> (snapshot). No hay data de guita: todo RR.
-        </div> */}
-      </div>
-      {openImg && (
-        <div
-            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm p-4 flex items-center justify-center"
-            onClick={() => setOpenImg(null)}
-            role="dialog"
-            aria-modal="true"
-        >
-            <div
-            className="relative w-full max-w-5xl"
-            onClick={(e) => e.stopPropagation()} // evita que se cierre al clickear la imagen
-            >
-            <button
-                type="button"
-                onClick={() => setOpenImg(null)}
-                className="absolute -top-3 -right-3 h-10 w-10 rounded-full border border-white/15 bg-white/10 text-white/90 hover:bg-white/15 cursor-pointer"
-                aria-label="Cerrar"
-            >
-                ✕
-            </button>
-
-            <div className="overflow-hidden rounded-2xl border border-white/15 bg-black">
-                <img src={openImg} alt="Captura grande" className="w-full h-auto max-h-[80vh] object-contain" />
-            </div>
-
-            <div className="mt-3 text-center text-xs text-white/60">
-                Click afuera o ✕ para cerrar
-            </div>
-            </div>
-        </div>
         )}
+
+        {/* ── Volver ── */}
+        <div className="mt-8">
+          <button
+            onClick={() => router.push("/journal/history")}
+            className="h-10 rounded-xl border border-white/15 bg-white/5 px-4 text-sm font-extrabold text-white hover:bg-white/10 transition"
+          >
+            ← Volver al historial
+          </button>
+        </div>
+
+      </div>
     </div>
   );
 }
