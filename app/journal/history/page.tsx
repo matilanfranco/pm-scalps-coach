@@ -53,7 +53,7 @@ type TradeEntry = {
   biasShown: "LONG" | "SHORT" | "WAIT" | "NO TRADE";
   marketState: MarketState;
   invalidationHappened: "yes" | "no" | "unknown";
-  invalidationChoice: InvalidationChoice | null;
+  invalidationChoice?: InvalidationChoice | null;
   suggestedTargets: Level[];
 
   helped: boolean;
@@ -64,7 +64,7 @@ type TradeEntry = {
   followedPlan: FollowedPlan;
   rr: number | null;
   setupTag: SetupTag;
-  targetTag: TargetTag;
+  targetTag?: TargetTag;
 
   note: string;
 };
@@ -429,7 +429,7 @@ export default function HistoryPage() {
           }))
           .sort((a, b) => a.createdAt - b.createdAt);
 
-        setAllTrades(normalized);
+        setAllTrades(normalized as TradeEntry[]);
         localStorage.setItem(LS_KEY, JSON.stringify(normalized));
       } catch (e) {
         console.error("History load failed:", e);
