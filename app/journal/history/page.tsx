@@ -1,378 +1,126 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { listTradesSince, deleteTrade, updateTrade } from "@/lib/tradesDb";
+import type { TradeEntry, Instrument, TradeSide, FollowedPlan, OutcomeDb, MarketState, SetupTag } from "@/lib/types";
+import { formatYMD, weekdayLabel, startOfDayMs, endOfDayMs, buildTimestamp, normalizeOutcome, outcomeKey, outcomeBadge, safeNumber, computeKPIs, isValidHHMM } from "@/lib/helpers";
 
-type Level =
-  | "PDH"
-  | "PDL"
-  | "ASIA_H"
-  | "ASIA_L"
-  | "LONDON_H"
-  | "LONDON_L"
-  | "WEEKLY_H"
-  | "WEEKLY_L";
+const LS_KEY = "trades_cache_v1";
 
-type Reaction = "accept" | "absorb" | "unclear";
-type OutcomeDb = "win" | "loss" | "be" | "unknown";
+type OutcomeKey = "all" | OutcomeDb;
+type Weekday = "ALL" | "Lunes" | "Martes" | "Miércoles" | "Jueves" | "Viernes";
 
-type MarketState =
-  | "EXPANSION"
-  | "DELIVERY_CONDITIONAL"
-  | "TRANSITION"
-  | "REVERSAL_CONFIRMED"
-  | "CHOP_NO_TRADE"
-  | "WAIT";
+function weekdayEsFromMs(ms: number): Weekday {
+  const d = new Date(ms).getDay();
+  if (d === 1) return "Lunes"; if (d === 2) return "Martes";
+  if (d === 3) return "Miércoles"; if (d === 4) return "Jueves";
+  if (d === 5) return "Viernes"; return "ALL";
+}
 
-type InvalidationChoice = "micro_m5" | "shift_m15" | "ifvg";
-type SetupTag = "A" | "B" | "unknown";
-type TargetTag = Level | "HTF" | "NONE";
-type TradeSide = "BUY" | "SELL";
-type FollowedPlan = "yes" | "no";
-
-type Instrument = "ES" | "NQ";
-
-type TradeEntry = {
-  id: string;
-  createdAt: number;
-
-  instrument: Instrument;
-
-  liqTaken: "yes" | "no" | "unknown";
-  takenLevels: Level[];
-  lastTaken: Level | null;
-  reaction: Reaction;
-  pendingLevels: Level[];
-  hasFvg: "yes" | "no" | "skip";
-  outcome?: OutcomeDb;
-
-  biasShown: "LONG" | "SHORT" | "WAIT" | "NO TRADE";
-  marketState: MarketState;
-  invalidationHappened: "yes" | "no" | "unknown";
-  invalidationChoice?: InvalidationChoice | null;
-  suggestedTargets: Level[];
-
-  helped: boolean;
-
-  tradeTaken: "yes" | "no";
-  tradeTime: string; // HH:MM
-  tradeSide: TradeSide;
-  followedPlan: FollowedPlan;
-  rr: number | null;
-  setupTag: SetupTag;
-  targetTag?: TargetTag;
-
-  note: string;
+// ─── Styles ───────────────────────────────────────────────
+const card: React.CSSProperties = {
+  background: "rgba(10,8,5,0.8)", border: "1px solid rgba(180,140,80,0.14)",
+  borderRadius: 16, padding: "18px 20px",
+  backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)",
 };
 
-function formatYMD(ms: number) {
-  return new Date(ms).toISOString().slice(0, 10); // "YYYY-MM-DD"
-}
-
-function weekdayLabelFromMs(ms: number) {
-  const d = new Date(ms).getDay(); // 0 dom .. 6 sáb
-  if (d === 1) return "Lunes";
-  if (d === 2) return "Martes";
-  if (d === 3) return "Miércoles";
-  if (d === 4) return "Jueves";
-  if (d === 5) return "Viernes";
-  if (d === 6) return "Sábado";
-  return "Domingo";
-}
-
-type OutcomeKey = "all" | "win" | "loss" | "be" | "unknown";
-
-function normalizeOutcome(o: any): "win" | "loss" | "be" | "unknown" {
-  if (o === "win" || o === "loss" || o === "be" || o === "unknown") return o;
-  if (o === "PROFIT") return "win";
-  if (o === "STOP") return "loss";
-  if (o === "BE") return "be";
-  return "unknown";
-}
-
-// ✅ outcomeKey ahora se basa en outcome de DB (y fallback)
-function outcomeKey(t: TradeEntry): OutcomeKey {
-  const o = normalizeOutcome((t as any).outcome);
-  if (o === "win" || o === "loss" || o === "be" || o === "unknown") return o;
-
-  // fallback viejo si algún doc no trae outcome
-  if (t.rr == null) return "unknown";
-  if (t.rr > 0) return "win";
-  if (t.rr < 0) return "loss";
-  return "be";
-}
-
-function safeNumber(n: number | null | undefined) {
-  return typeof n === "number" && Number.isFinite(n) ? n : null;
-}
-
-function median(nums: number[]) {
-  if (!nums.length) return 0;
-  const a = [...nums].sort((x, y) => x - y);
-  const mid = Math.floor(a.length / 2);
-  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
-}
-
-/**
- * ✅ KPIs corregidos:
- * - Winrate: cuenta wins/loss por OUTCOME (no por signo de RR)
- * - NetRR: win suma rr (si null => 0), loss resta -1, BE=0, unknown=0
- * - AvgRR/Expectancy: basado en rrEarned por trade cerrado (win/loss/be)
- */
-function computeKPIs(trades: TradeEntry[]) {
-  const only = trades.filter((t) => t.tradeTaken === "yes");
-
-  const closed = only
-    .map((t) => ({ ...t, out: normalizeOutcome((t as any).outcome) }))
-    .filter((t) => t.out === "win" || t.out === "loss" || t.out === "be");
-
-  const winCount = closed.filter((t) => t.out === "win").length;
-  const lossCount = closed.filter((t) => t.out === "loss").length;
-  const beCount = closed.filter((t) => t.out === "be").length;
-
-  const total = only.length;
-  const totalClosed = closed.length;
-
-  const winrate = totalClosed > 0 ? (winCount / (winCount + lossCount)) * 100 : 0;
-
-  // ✅ RR earned: win = rr, loss = -1, be = 0
-  const rrEarnedList = closed.map((t) => {
-    if (t.out === "win") return safeNumber(t.rr) ?? 0;
-    if (t.out === "loss") return -1;
-    return 0; // be
-  });
-
-  const netRR = rrEarnedList.reduce((a, b) => a + b, 0);
-  const avgRR = totalClosed > 0 ? netRR / totalClosed : 0;
-  const medRR = median(rrEarnedList);
-
-  const winsRR = rrEarnedList.filter((r, i) => closed[i].out === "win");
-  const lossesRR = rrEarnedList.filter((r, i) => closed[i].out === "loss"); // siempre -1
-  const avgWin = winsRR.length ? winsRR.reduce((a, b) => a + b, 0) / winsRR.length : 0;
-  const avgLoss = lossesRR.length ? lossesRR.reduce((a, b) => a + b, 0) / lossesRR.length : 0; // negativo
-
-  const pWin = totalClosed > 0 ? winCount / totalClosed : 0;
-  const pLoss = totalClosed > 0 ? lossCount / totalClosed : 0;
-  const expectancy = pWin * avgWin + pLoss * avgLoss;
-
-  const sumWins = winsRR.reduce((a, b) => a + b, 0);
-  const sumLossAbs = Math.abs(lossesRR.reduce((a, b) => a + b, 0)); // abs de negativos
-  const profitFactor = sumLossAbs > 0 ? sumWins / sumLossAbs : sumWins > 0 ? Infinity : 0;
-
-  // streaks (por outcome)
-  let bestWinStreak = 0;
-  let bestLossStreak = 0;
-  let curW = 0;
-  let curL = 0;
-
-  for (const t of only) {
-    const k = outcomeKey(t);
-    if (k === "win") {
-      curW += 1;
-      curL = 0;
-    } else if (k === "loss") {
-      curL += 1;
-      curW = 0;
-    } else {
-      curW = 0;
-      curL = 0;
-    }
-    bestWinStreak = Math.max(bestWinStreak, curW);
-    bestLossStreak = Math.max(bestLossStreak, curL);
-  }
-
+function pillStyle(active = false, variant: "default"|"green"|"red"|"amber" = "default"): React.CSSProperties {
+  const c = {
+    default: { b:"rgba(180,140,80,0.35)", bg:"rgba(200,146,58,0.08)", t:"#c8923a" },
+    green:   { b:"rgba(74,158,106,0.5)",  bg:"rgba(74,158,106,0.12)", t:"#7dcb9a" },
+    red:     { b:"rgba(184,85,85,0.5)",   bg:"rgba(184,85,85,0.12)", t:"#e08888" },
+    amber:   { b:"rgba(200,146,58,0.5)",  bg:"rgba(200,146,58,0.1)", t:"#c8923a" },
+  }[variant];
   return {
-    total,
-    totalWithRR: totalClosed, // ahora significa "cerrados"
-    winCount,
-    lossCount,
-    beCount,
-    winrate,
-    avgRR,
-    medRR,
-    netRR,
-    expectancy,
-    profitFactor,
-    bestWinStreak,
-    bestLossStreak,
+    height: 32, padding: "0 14px", borderRadius: 999, cursor: "pointer",
+    border: `1px solid ${active ? c.b : "rgba(180,140,80,0.12)"}`,
+    background: active ? c.bg : "rgba(255,255,255,0.02)",
+    color: active ? c.t : "rgba(232,224,208,0.35)",
+    fontSize: 11, fontWeight: 700, transition: "all 0.15s", whiteSpace: "nowrap" as const,
   };
 }
 
-function downloadTextFile(filename: string, content: string, mime = "text/plain") {
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+function outcomeColor(k: OutcomeDb): string {
+  if (k === "win") return "#7dcb9a";
+  if (k === "loss") return "#e08888";
+  if (k === "be") return "#c8923a";
+  return "rgba(232,224,208,0.35)";
 }
 
-function toCSVRow(values: (string | number | null | undefined)[]) {
-  return values
-    .map((v) => {
-      const s = v == null ? "" : String(v);
-      const escaped = s.replaceAll('"', '""');
-      return `"${escaped}"`;
-    })
-    .join(",");
+function outcomeBg(k: OutcomeDb): string {
+  if (k === "win") return "rgba(74,158,106,0.12)";
+  if (k === "loss") return "rgba(184,85,85,0.12)";
+  if (k === "be") return "rgba(200,146,58,0.1)";
+  return "rgba(255,255,255,0.04)";
+}
+
+function outcomeBorder(k: OutcomeDb): string {
+  if (k === "win") return "rgba(74,158,106,0.35)";
+  if (k === "loss") return "rgba(184,85,85,0.35)";
+  if (k === "be") return "rgba(200,146,58,0.3)";
+  return "rgba(180,140,80,0.12)";
+}
+
+function Tag({ children, color = "rgba(232,224,208,0.35)", bg = "rgba(255,255,255,0.04)", border = "rgba(180,140,80,0.12)" }: {
+  children: React.ReactNode; color?: string; bg?: string; border?: string;
+}) {
+  return (
+    <span style={{
+      height: 24, padding: "0 10px", display: "inline-flex", alignItems: "center",
+      borderRadius: 999, border: `1px solid ${border}`, background: bg,
+      fontSize: 11, fontWeight: 700, color, whiteSpace: "nowrap",
+    }}>{children}</span>
+  );
 }
 
 function useIsMobile(bp = 768) {
   const [isMobile, setIsMobile] = useState(false);
-
   useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < bp);
-    onResize();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    const f = () => setIsMobile(window.innerWidth < bp);
+    f(); window.addEventListener("resize", f);
+    return () => window.removeEventListener("resize", f);
   }, [bp]);
-
   return isMobile;
 }
 
+function toCSVRow(values: (string | number | null | undefined)[]) {
+  return values.map(v => `"${(v == null ? "" : String(v)).replaceAll('"', '""')}"`).join(",");
+}
+
 function exportTradesCSV(trades: TradeEntry[], filename: string) {
-  const header = [
-    "id",
-    "createdAt",
-    "day",
-    "tradeTime",
-    "instrument",
-    "tradeSide",
-    "rr",
-    "outcome",
-    "followedPlan",
-    "setupTag",
-    "targetTag",
-    "biasShown",
-    "marketState",
-    "liqTaken",
-    "reaction",
-    "pendingCount",
-    "note",
-  ];
-
-  const rows = trades.map((t) =>
-    toCSVRow([
-      t.id,
-      t.createdAt,
-      formatYMD(t.createdAt),
-      t.tradeTime,
-      t.instrument,
-      t.tradeSide,
-      t.rr,
-      outcomeKey(t),
-      t.followedPlan,
-      t.setupTag,
-      t.targetTag,
-      t.biasShown,
-      t.marketState,
-      t.liqTaken,
-      t.reaction,
-      t.pendingLevels?.length ?? 0,
-      t.note ?? "",
-    ])
-  );
-
+  const header = ["id","createdAt","day","tradeTime","instrument","tradeSide","rr","outcome","followedPlan","setupTag","biasShown","marketState","liqTaken","reaction","note"];
+  const rows = trades.map(t => toCSVRow([t.id, t.createdAt, formatYMD(t.createdAt), t.tradeTime, t.instrument, t.tradeSide, t.rr, outcomeKey(t), t.followedPlan, t.setupTag, t.biasShown, t.marketState, t.liqTaken, t.reaction, t.note ?? ""]));
   const csv = [toCSVRow(header), ...rows].join("\n");
-  downloadTextFile(filename, csv, "text/csv");
-}
-
-function startOfDayMs(ymd: string) {
-  const [y, m, d] = ymd.split("-").map((x) => Number(x));
-  return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0).getTime();
-}
-function endOfDayMs(ymd: string) {
-  const [y, m, d] = ymd.split("-").map((x) => Number(x));
-  return new Date(y, (m || 1) - 1, d || 1, 23, 59, 59, 999).getTime();
-}
-
-function rrTone(rr: number | null) {
-  if (rr == null) return "muted" as const;
-  if (rr > 0) return "good" as const;
-  if (rr < 0) return "danger" as const;
-  return "warn" as const;
-}
-
-function outcomeBadge(t: TradeEntry) {
-  const k = outcomeKey(t);
-  if (k === "win") return { text: "✅ Win", tone: "good" as const };
-  if (k === "loss") return { text: "❌ Loss", tone: "danger" as const };
-  if (k === "be") return { text: "◻︎ BE", tone: "warn" as const };
-  return { text: "—", tone: "muted" as const };
-}
-
-function tonePill(tone: "good" | "danger" | "warn" | "muted") {
-  switch (tone) {
-    case "good":
-      return "border-emerald-400/30 bg-emerald-500/10 text-emerald-100 shadow-[0_0_0_1px_rgba(16,185,129,0.12)]";
-    case "danger":
-      return "border-red-400/30 bg-red-500/10 text-red-100 shadow-[0_0_0_1px_rgba(248,113,113,0.12)]";
-    case "warn":
-      return "border-amber-400/30 bg-amber-500/10 text-amber-100 shadow-[0_0_0_1px_rgba(251,191,36,0.10)]";
-    default:
-      return "border-white/12 bg-white/5 text-white/75";
-  }
-}
-
-function sidePill(side: TradeSide) {
-  return side === "BUY"
-    ? "border-sky-400/30 bg-sky-500/10 text-sky-100 shadow-[0_0_0_1px_rgba(56,189,248,0.10)]"
-    : "border-fuchsia-400/30 bg-fuchsia-500/10 text-fuchsia-100 shadow-[0_0_0_1px_rgba(232,121,249,0.10)]";
-}
-
-function chip(s: string, variant: "muted" | "good" | "danger" | "warn" = "muted") {
-  const base = "rounded-full border px-3 py-1 text-xs font-extrabold whitespace-nowrap";
-  const cls = tonePill(
-    variant === "good" ? "good" : variant === "danger" ? "danger" : variant === "warn" ? "warn" : "muted"
-  );
-  return <span className={`${base} ${cls}`}>{s}</span>;
-}
-
-
-
-type Weekday = "ALL" | "Lunes" | "Martes" | "Miércoles" | "Jueves" | "Viernes";
-
-function weekdayEsFromMs(ms: number): Weekday {
-  const d = new Date(ms).getDay(); // 0 dom .. 6 sáb
-  if (d === 1) return "Lunes";
-  if (d === 2) return "Martes";
-  if (d === 3) return "Miércoles";
-  if (d === 4) return "Jueves";
-  if (d === 5) return "Viernes";
-  return "ALL";
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
 }
 
 export default function HistoryPage() {
   const router = useRouter();
   const isMobile = useIsMobile();
 
-  // ✅ no returns antes de hooks
   const [supabase, setSupabase] = useState<ReturnType<typeof getSupabaseClient> | null>(null);
-
-  useEffect(() => {
-    setSupabase(getSupabaseClient());
-  }, []);
+  useEffect(() => { setSupabase(getSupabaseClient()); }, []);
 
   const [allTrades, setAllTrades] = useState<TradeEntry[]>([]);
+  const [userId, setUserId] = useState<string | null>(null);
 
-  // Filters
   const [fOutcome, setFOutcome] = useState<OutcomeKey>("all");
   const [fSide, setFSide] = useState<"all" | TradeSide>("all");
-  const [fPlan, setFPlan] = useState<"all" | FollowedPlan>("all");
-  const [fSetup, setFSetup] = useState<"all" | SetupTag>("all");
-  const [fBias, setFBias] = useState<"all" | TradeEntry["biasShown"]>("all");
-  const [fState, setFState] = useState<"all" | MarketState>("all");
-  const [fTarget, setFTarget] = useState<"all" | TargetTag>("all");
   const [fWeekday, setFWeekday] = useState<Weekday>("ALL");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [q, setQ] = useState("");
+  const [pageSize] = useState(15);
+  const [page, setPage] = useState(1);
 
+  // Modal edición
   const [editTrade, setEditTrade] = useState<TradeEntry | null>(null);
-
-  // campos del form de edición
   const [editDate, setEditDate] = useState("");
   const [editTime, setEditTime] = useState("");
   const [editSide, setEditSide] = useState<TradeSide>("BUY");
@@ -384,22 +132,9 @@ export default function HistoryPage() {
   const [editInstrument, setEditInstrument] = useState<Instrument>("NQ");
   const [editSaving, setEditSaving] = useState(false);
 
-  const [from, setFrom] = useState<string>("");
-  const [to, setTo] = useState<string>("");
-  const [q, setQ] = useState("");
-
-  const [pageSize, setPageSize] = useState<number>(15);
-  const [page, setPage] = useState<number>(1);
-
-  const [userId, setUserId] = useState<string | null>(null);
-
-  const LS_KEY = "trades_cache_v1";
-
   useEffect(() => {
     if (!supabase) return;
     let alive = true;
-
-    // render rápido desde cache
     try {
       const cached = localStorage.getItem(LS_KEY);
       if (cached) {
@@ -407,809 +142,378 @@ export default function HistoryPage() {
         if (Array.isArray(parsed)) setAllTrades(parsed as TradeEntry[]);
       }
     } catch {}
-
     (async () => {
       try {
         const { data } = await supabase.auth.getSession();
         const uid = data.session?.user?.id;
         if (!uid) return;
         if (alive) setUserId(uid);
-
-        // ✅ siempre traemos todo — sin LS_LAST
         const fromDb = await listTradesSince(uid, 0, 500);
         if (!alive) return;
-
         const normalized = fromDb
-          .map((t) => ({
-            ...t,
-            instrument:
-              t.instrument === "ES" || t.instrument === "NQ"
-                ? t.instrument
-                : "ES",
-          }))
+          .map(t => ({ ...t, instrument: t.instrument === "ES" || t.instrument === "NQ" ? t.instrument : ("ES" as Instrument) }))
           .sort((a, b) => a.createdAt - b.createdAt);
-
         setAllTrades(normalized as TradeEntry[]);
         localStorage.setItem(LS_KEY, JSON.stringify(normalized));
-      } catch (e) {
-        console.error("History load failed:", e);
-      }
+      } catch (e) { console.error(e); }
     })();
-
     return () => { alive = false; };
   }, [supabase]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [fOutcome, fSide, fPlan, fSetup, fBias, fState, fTarget, fWeekday, from, to, q, pageSize]);
+  useEffect(() => { setPage(1); }, [fOutcome, fSide, fWeekday, from, to, q]);
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
     const fromMs = from ? startOfDayMs(from) : null;
     const toMs = to ? endOfDayMs(to) : null;
-
-    const base = allTrades.filter((t) => {
+    const base = allTrades.filter(t => {
       if (fromMs != null && t.createdAt < fromMs) return false;
       if (toMs != null && t.createdAt > toMs) return false;
-
-      if (fWeekday !== "ALL") {
-        if (weekdayEsFromMs(t.createdAt) !== fWeekday) return false;
-      }
-
+      if (fWeekday !== "ALL" && weekdayEsFromMs(t.createdAt) !== fWeekday) return false;
       if (fOutcome !== "all" && outcomeKey(t) !== fOutcome) return false;
       if (fSide !== "all" && t.tradeSide !== fSide) return false;
-      if (fPlan !== "all" && t.followedPlan !== fPlan) return false;
-      if (fSetup !== "all" && t.setupTag !== fSetup) return false;
-      if (fBias !== "all" && t.biasShown !== fBias) return false;
-      if (fState !== "all" && t.marketState !== fState) return false;
-      if (fTarget !== "all" && t.targetTag !== fTarget) return false;
-
       if (query) {
-        const blob = [
-          t.note ?? "",
-          t.marketState ?? "",
-          t.biasShown ?? "",
-          t.instrument ?? "",
-          t.targetTag ?? "",
-          t.setupTag ?? "",
-          t.tradeTime ?? "",
-          t.tradeSide ?? "",
-          t.followedPlan ?? "",
-          t.reaction ?? "",
-          t.liqTaken ?? "",
-        ]
-          .join(" ")
-          .toLowerCase();
-
+        const blob = [t.note ?? "", t.marketState ?? "", t.biasShown ?? "", t.instrument ?? "", t.setupTag ?? "", t.tradeSide ?? "", t.reaction ?? ""].join(" ").toLowerCase();
         if (!blob.includes(query)) return false;
       }
-
       return true;
     });
-
-    base.sort((a, b) => b.createdAt - a.createdAt); // newest -> oldest
-    return base;
-  }, [allTrades, fOutcome, fSide, fPlan, fSetup, fBias, fState, fTarget, fWeekday, from, to, q]);
+    return base.sort((a, b) => b.createdAt - a.createdAt);
+  }, [allTrades, fOutcome, fSide, fWeekday, from, to, q]);
 
   const kpisAll = useMemo(() => computeKPIs(allTrades), [allTrades]);
   const kpisFiltered = useMemo(() => computeKPIs(filtered), [filtered]);
 
   const last7 = useMemo(() => {
-    const newest = [...filtered].sort((a, b) => b.createdAt - a.createdAt).slice(0, 7);
-
-    // ✅ netRR last7 con regla nueva (loss=-1)
+    const newest = [...filtered].slice(0, 7);
     const netRR = newest.reduce((acc, t) => {
-      const o = normalizeOutcome((t as any).outcome);
+      const o = normalizeOutcome(t.outcome);
       if (o === "win") return acc + (safeNumber(t.rr) ?? 0);
       if (o === "loss") return acc - 1;
-      if (o === "be") return acc + 0;
       return acc;
     }, 0);
-
-    return { count: newest.length, netRR };
+    return { netRR };
   }, [filtered]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const pageSafe = Math.min(Math.max(1, page), totalPages);
-
-  const pageItems = useMemo(() => {
-    const start = (pageSafe - 1) * pageSize;
-    return filtered.slice(start, start + pageSize);
-  }, [filtered, pageSafe, pageSize]);
-
-  // UI classes
-  const panel =
-    "mt-5 rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-xl p-4 shadow-[0_18px_40px_rgba(0,0,0,0.45)]";
-  const pillBtn =
-    "h-9 rounded-full border cursor-pointer border-white/12 bg-white/[0.03] px-3 text-xs font-extrabold text-white/75 hover:bg-white/[0.06] hover:border-white/20 transition";
-  const pillOn = "border-white/25 bg-white/[0.07] text-white";
-  const input =
-    "h-9 rounded-xl border border-white/12 bg-white/[0.03] px-2 text-xs font-extrabold text-white outline-none placeholder:text-white/35 focus:border-white/25 focus:bg-white/[0.05] transition";
-
-  const kpiCard =
-    "rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.06] to-white/[0.03] p-4 shadow-[0_14px_30px_rgba(0,0,0,0.38)]";
-
-  function resetFilters() {
-    setFOutcome("all");
-    setFSide("all");
-    setFPlan("all");
-    setFSetup("all");
-    setFBias("all");
-    setFState("all");
-    setFTarget("all");
-    setFWeekday("ALL");
-    setFrom("");
-    setTo("");
-    setQ("");
-    setPageSize(15);
-    setPage(1);
-  }
+  const pageItems = useMemo(() => filtered.slice((pageSafe - 1) * pageSize, pageSafe * pageSize), [filtered, pageSafe, pageSize]);
 
   function openEdit(t: TradeEntry) {
-  setEditTrade(t);
-  setEditDate(formatYMD(t.createdAt));
-  setEditTime(t.tradeTime || "");
-  setEditSide(t.tradeSide);
-  setEditFollowed(t.followedPlan);
-  setEditRR(t.rr != null ? String(t.rr) : "");
-  setEditOutcome(normalizeOutcome((t as any).outcome));
-  setEditSetup(t.setupTag ?? "unknown");
-  setEditNote(t.note ?? "");
-  setEditInstrument(t.instrument ?? "NQ");
-}
-
-async function saveEdit() {
-  if (!editTrade) return;
-  setEditSaving(true);
-
-  try {
-    // construir nuevo createdAt desde la fecha editada
-    const buildTs = (): number => {
-      if (!editDate) return editTrade.createdAt;
-      const [y, m, d] = editDate.split("-").map(Number);
-      const dt = new Date(y, m - 1, d, 12, 0, 0, 0);
-      if (editTime && /^([01]\d|2[0-3]):([0-5]\d)$/.test(editTime)) {
-        const [hh, mm] = editTime.split(":").map(Number);
-        dt.setHours(hh, mm, 0, 0);
-      }
-      return dt.getTime();
-    };
-
-    const rrVal = (() => {
-      const n = Number(String(editRR).replace(",", "."));
-      return Number.isFinite(n) ? n : null;
-    })();
-
-    await updateTrade(editTrade.id, {
-      createdAt: buildTs(),
-      tradeTime: editTime,
-      tradeSide: editSide,
-      followedPlan: editFollowed,
-      rr: rrVal,
-      outcome: editOutcome,
-      setupTag: editSetup,
-      note: editNote,
-      instrument: editInstrument,
-    });
-
-    // actualizar local state
-    setAllTrades((prev) => {
-      const next = prev.map((t) =>
-        t.id !== editTrade.id
-          ? t
-          : {
-              ...t,
-              createdAt: buildTs(),
-              tradeTime: editTime,
-              tradeSide: editSide,
-              followedPlan: editFollowed,
-              rr: rrVal,
-              outcome: editOutcome,
-              setupTag: editSetup as any,
-              note: editNote,
-              instrument: editInstrument,
-            }
-      );
-      localStorage.setItem(LS_KEY, JSON.stringify(next));
-      return next;
-    });
-
-    setEditTrade(null);
-  } catch (err) {
-    console.error("updateTrade failed:", err);
-    alert("No se pudo guardar.");
-  } finally {
-    setEditSaving(false);
-  }
-}
-
-async function handleDeleteTrade(e: React.MouseEvent, t: TradeEntry) {
-  e.stopPropagation();
-
-  if (!userId) {
-    alert("No hay sesión activa.");
-    return;
+    setEditTrade(t); setEditDate(formatYMD(t.createdAt)); setEditTime(t.tradeTime || "");
+    setEditSide(t.tradeSide); setEditFollowed(t.followedPlan);
+    setEditRR(t.rr != null ? String(t.rr) : "");
+    setEditOutcome(normalizeOutcome(t.outcome)); setEditSetup(t.setupTag ?? "unknown");
+    setEditNote(t.note ?? ""); setEditInstrument(t.instrument ?? "NQ");
   }
 
-  const ok = window.confirm(
-    `¿Estás seguro que querés borrar este trade?\n\n${formatYMD(t.createdAt)} ${t.tradeTime || ""} · ${t.instrument} · ${t.tradeSide}`
-  );
-  if (!ok) return;
-
-  try {
-    await deleteTrade(userId, t.id);
-
-    setAllTrades((prev) => {
-      const next = prev.filter((x) => x.id !== t.id);
-      localStorage.setItem(LS_KEY, JSON.stringify(next));
-      return next;
-    });
-  } catch (err) {
-    console.error("Delete failed:", err);
-    alert("No se pudo borrar el trade.");
+  async function saveEdit() {
+    if (!editTrade) return;
+    setEditSaving(true);
+    try {
+      const ts = buildTimestamp(editDate, editTime);
+      const rrVal = (() => { const n = Number(String(editRR).replace(",", ".")); return Number.isFinite(n) ? n : null; })();
+      await updateTrade(editTrade.id, { createdAt: ts, tradeTime: editTime, tradeSide: editSide, followedPlan: editFollowed, rr: rrVal, outcome: editOutcome, setupTag: editSetup, note: editNote, instrument: editInstrument });
+      setAllTrades(prev => {
+        const next = prev.map(t => t.id !== editTrade.id ? t : { ...t, createdAt: ts, tradeTime: editTime, tradeSide: editSide, followedPlan: editFollowed, rr: rrVal, outcome: editOutcome, setupTag: editSetup as SetupTag, note: editNote, instrument: editInstrument });
+        localStorage.setItem(LS_KEY, JSON.stringify(next)); return next;
+      });
+      setEditTrade(null);
+    } catch (err) { console.error(err); alert("No se pudo guardar."); }
+    finally { setEditSaving(false); }
   }
-}
 
-  if (!supabase) {
-      return (
-        <div className="min-h-screen bg-neutral-950 text-white">
-          <div className="mx-auto max-w-6xl px-4 py-8">
-            Cargando…
-          </div>
-        </div>
-      );
-    }
+  async function handleDelete(e: React.MouseEvent, t: TradeEntry) {
+    e.stopPropagation();
+    if (!userId) return;
+    if (!window.confirm(`¿Borrar este trade?\n${formatYMD(t.createdAt)} ${t.tradeTime || ""} · ${t.instrument} · ${t.tradeSide}`)) return;
+    try {
+      await deleteTrade(userId, t.id);
+      setAllTrades(prev => { const next = prev.filter(x => x.id !== t.id); localStorage.setItem(LS_KEY, JSON.stringify(next)); return next; });
+    } catch { alert("No se pudo borrar."); }
+  }
+
+  if (!supabase) return <div style={{ minHeight:"100vh", background:"#0c0a07", display:"flex", alignItems:"center", justifyContent:"center", color:"rgba(232,224,208,0.3)", fontSize:13 }}>Cargando…</div>;
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white">
-      <div className="mx-auto max-w-6xl px-4 py-8">
+    <>
+      <div style={{ position:"fixed", inset:0, zIndex:0, backgroundImage:"url('/PM_SCALPS_BG.png')", backgroundSize:"cover", backgroundPosition:"center" }} />
+      <div style={{ position:"fixed", inset:0, zIndex:1, background:"rgba(6,4,2,0.78)", backgroundImage:"radial-gradient(ellipse 100% 45% at 50% 0%, rgba(150,90,20,0.22) 0%, transparent 60%)" }} />
+
+      <div style={{ position:"relative", zIndex:2, maxWidth:1000, margin:"0 auto", padding:"24px 20px 48px" }}>
+
         {/* Header */}
-        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div style={{ display:"flex", flexWrap:"wrap", alignItems:"flex-end", justifyContent:"space-between", gap:12, marginBottom:24 }}>
           <div>
-            <div className="text-xs font-extrabold tracking-[0.18em] text-white/55">JOURNAL</div>
-            <h1 className="mt-2 text-3xl font-black">History</h1>
-            <div className="mt-2 text-sm text-white/65">Lista de trades. Click en la fila para ver la descripción.</div>
+            <div style={{ fontSize:10, fontWeight:800, letterSpacing:"0.22em", color:"rgba(200,146,58,0.45)" }}>JOURNAL</div>
+            <div style={{ fontSize:22, fontWeight:900, color:"rgba(232,224,208,0.9)", marginTop:2 }}>History</div>
+            <div style={{ fontSize:12, color:"rgba(232,224,208,0.35)", marginTop:4 }}>Click en un trade para ver el detalle</div>
           </div>
-
-          <div className="flex flex-wrap gap-2">
-            <button
-              className={pillBtn}
-              onClick={() => exportTradesCSV(allTrades, "pm-scalps-trades_ALL.csv")}
-              title="Exporta TODO (sin filtros)"
-            >
-              Export ALL CSV
-            </button>
-
-            <button
-              className={pillBtn}
-              onClick={() => exportTradesCSV(filtered, "pm-scalps-trades_FILTERED.csv")}
-              title="Exporta lo filtrado"
-            >
-              Export FILTERED CSV
-            </button>
-
-            <button className={pillBtn} onClick={resetFilters}>
-              Reset
-            </button>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+            <button onClick={() => exportTradesCSV(allTrades, "pm-scalps-ALL.csv")} style={{ ...pillStyle(), fontSize:11 }}>Export ALL</button>
+            <button onClick={() => exportTradesCSV(filtered, "pm-scalps-FILTERED.csv")} style={{ ...pillStyle(), fontSize:11 }}>Export filtrado</button>
           </div>
         </div>
 
         {/* KPIs */}
-        <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <div className={kpiCard}>
-            <div className="text-xs font-extrabold text-white/55">TOTAL TRADES</div>
-            <div className="mt-2 flex items-end gap-2">
-              <div className="text-3xl font-black">{kpisAll.total}</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))", gap:10, marginBottom:16 }}>
+          {[
+            { label:"TOTAL TRADES", value: kpisAll.total, sub: `${kpisAll.totalWithRR} cerrados` },
+            { label:"WINRATE", value: `${kpisFiltered.winrate.toFixed(1)}%`, sub: `W ${kpisFiltered.winCount} · L ${kpisFiltered.lossCount} · BE ${kpisFiltered.beCount}` },
+            { label:"NET RR", value: kpisFiltered.netRR.toFixed(2), sub: `Last 7: ${last7.netRR.toFixed(2)}R`, color: kpisFiltered.netRR >= 0 ? "#7dcb9a" : "#e08888" },
+            { label:"AVG RR", value: kpisFiltered.avgRR.toFixed(2), sub: `Exp: ${kpisFiltered.expectancy.toFixed(2)} · PF: ${kpisFiltered.profitFactor === Infinity ? "∞" : kpisFiltered.profitFactor.toFixed(2)}` },
+          ].map(({ label, value, sub, color }) => (
+            <div key={label} style={card}>
+              <div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.18em", color:"rgba(232,224,208,0.28)", marginBottom:8 }}>{label}</div>
+              <div style={{ fontSize:26, fontWeight:900, color: color ?? "rgba(232,224,208,0.9)" }}>{value}</div>
+              <div style={{ fontSize:11, color:"rgba(232,224,208,0.35)", marginTop:4 }}>{sub}</div>
             </div>
-            <div className="mt-2 text-sm text-white/70">
-              Closed: <b className="text-white/90">{kpisAll.totalWithRR}</b>
-            </div>
-          </div>
-
-          <div className={kpiCard}>
-            <div className="text-xs font-extrabold text-white/55">WINRATE (cerrados)</div>
-            <div className="mt-2 text-3xl font-black">{kpisFiltered.winrate.toFixed(1)}%</div>
-            <div className="mt-2 text-sm text-white/70">
-              W <b className="text-white/90">{kpisFiltered.winCount}</b> · L{" "}
-              <b className="text-white/90">{kpisFiltered.lossCount}</b> · BE{" "}
-              <b className="text-white/90">{kpisFiltered.beCount}</b>
-            </div>
-          </div>
-
-          <div className={kpiCard}>
-            <div className="text-xs font-extrabold text-white/55">NET RR / MEDIAN RR</div>
-            <div className="mt-2 flex items-end gap-3">
-              <div className="text-3xl font-black">{kpisFiltered.netRR.toFixed(2)}</div>
-              <div className="text-sm text-white/60">
-                median <b className="text-white/90">{kpisFiltered.medRR.toFixed(2)}</b>
-              </div>
-            </div>
-            <div className="mt-2 text-sm text-white/70">
-              Last 7: <b className="text-white/90">{last7.netRR.toFixed(2)} RR</b>
-            </div>
-          </div>
-
-          <div className={kpiCard}>
-            <div className="text-xs font-extrabold text-white/55">AVG RR / EXPECTANCY</div>
-            <div className="mt-2 text-3xl font-black">{kpisFiltered.avgRR.toFixed(2)}</div>
-            <div className="mt-2 text-sm text-white/70">
-              Exp/trade: <b className="text-white/90">{kpisFiltered.expectancy.toFixed(2)}</b> · PF{" "}
-              <b className="text-white/90">
-                {kpisFiltered.profitFactor === Infinity ? "∞" : kpisFiltered.profitFactor.toFixed(2)}
-              </b>
-            </div>
-            <div className="mt-1 text-sm text-white/70">
-              Streaks: W <b className="text-white/90">{kpisFiltered.bestWinStreak}</b> · L{" "}
-              <b className="text-white/90">{kpisFiltered.bestLossStreak}</b>
-            </div>
-          </div>
+          ))}
         </div>
 
-        {/* Filters */}
-        <div className={panel}>
-          <div className="text-xs font-extrabold tracking-[0.16em] text-white/55">FILTROS</div>
+        {/* Filtros */}
+        <div style={{ ...card, marginBottom:12 }}>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:8, alignItems:"center" }}>
+            {([
+              { v:"all", l:"Todos" }, { v:"win", l:"✅ Wins" }, { v:"loss", l:"❌ Losses" }, { v:"be", l:"◻︎ BE" },
+            ] as { v: OutcomeKey, l: string }[]).map(({ v, l }) => (
+              <button key={v} onClick={() => setFOutcome(v)} style={pillStyle(fOutcome === v, v === "win" ? "green" : v === "loss" ? "red" : v === "be" ? "amber" : "default")}>{l}</button>
+            ))}
 
-          <div className="mt-3 flex flex-wrap items-start md:items-center gap-2">
-            {/* Outcome */}
-            <button onClick={() => setFOutcome("win")} className={[pillBtn, fOutcome === "win" ? pillOn : ""].join(" ")}>
-              ✅ Wins
-            </button>
+            <div style={{ width:1, height:20, background:"rgba(180,140,80,0.1)" }} />
 
-            <button
-              onClick={() => setFOutcome("loss")}
-              className={[pillBtn, fOutcome === "loss" ? pillOn : ""].join(" ")}
-            >
-              ❌ Losses
-            </button>
+            {([{v:"all",l:"Buy+Sell"},{v:"BUY",l:"BUY"},{v:"SELL",l:"SELL"}] as {v:string,l:string}[]).map(({v,l}) => (
+              <button key={v} onClick={() => setFSide(v as any)} style={pillStyle(fSide === v)}>{l}</button>
+            ))}
 
-            <button onClick={() => setFOutcome("be")} className={[pillBtn, fOutcome === "be" ? pillOn : ""].join(" ")}>
-              ◻︎ BE
-            </button>
+            <div style={{ width:1, height:20, background:"rgba(180,140,80,0.1)" }} />
 
-            <button onClick={() => setFOutcome("all")} className={[pillBtn, fOutcome === "all" ? pillOn : ""].join(" ")}>
-              All
-            </button>
-
-            <div className="mx-2 h-6 w-px bg-white/10" />
-
-            {/* Side */}
-            <button onClick={() => setFSide("BUY")} className={[pillBtn, fSide === "BUY" ? pillOn : ""].join(" ")}>
-              BUY
-            </button>
-
-            <button onClick={() => setFSide("SELL")} className={[pillBtn, fSide === "SELL" ? pillOn : ""].join(" ")}>
-              SELL
-            </button>
-
-            <button onClick={() => setFSide("all")} className={[pillBtn, fSide === "all" ? pillOn : ""].join(" ")}>
-              Buy+Sell
-            </button>
-
-            <div className="mx-2 h-6 w-px bg-white/10" />
-
-            {/* Weekday */}
-            <select
-              value={fWeekday}
-              onChange={(e) => setFWeekday(e.target.value as Weekday)}
-              className={input}
-              title="Filtrar por día de la semana"
-            >
-              <option value="ALL">Selecciona el día</option>
-              <option value="Lunes">Lunes</option>
-              <option value="Martes">Martes</option>
-              <option value="Miércoles">Miércoles</option>
-              <option value="Jueves">Jueves</option>
-              <option value="Viernes">Viernes</option>
+            <select value={fWeekday} onChange={e => setFWeekday(e.target.value as Weekday)} style={{
+              height:32, padding:"0 10px", borderRadius:999, cursor:"pointer",
+              border:"1px solid rgba(180,140,80,0.12)", background:"rgba(0,0,0,0.3)",
+              color:"rgba(232,224,208,0.4)", fontSize:11, fontWeight:700, outline:"none",
+            }}>
+              <option value="ALL">Todos los días</option>
+              {(["Lunes","Martes","Miércoles","Jueves","Viernes"] as Weekday[]).map(d => <option key={d} value={d}>{d}</option>)}
             </select>
 
-            <div className="mx-2 h-6 w-px bg-white/10" />
-
-            {/* Dates */}
-            <div className="flex items-center gap-2">
-              <div className="text-xs font-extrabold text-white/55">From</div>
-              <input value={from} onChange={(e) => setFrom(e.target.value)} type="date" className={input} />
-              <div className="text-xs font-extrabold text-white/55">To</div>
-              <input value={to} onChange={(e) => setTo(e.target.value)} type="date" className={input} />
+            <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+              <span style={{ fontSize:10, color:"rgba(232,224,208,0.28)", fontWeight:700 }}>De</span>
+              <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ height:32, padding:"0 10px", borderRadius:10, border:"1px solid rgba(180,140,80,0.12)", background:"rgba(0,0,0,0.3)", color:"rgba(232,224,208,0.5)", fontSize:11, outline:"none" }} />
+              <span style={{ fontSize:10, color:"rgba(232,224,208,0.28)", fontWeight:700 }}>a</span>
+              <input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ height:32, padding:"0 10px", borderRadius:10, border:"1px solid rgba(180,140,80,0.12)", background:"rgba(0,0,0,0.3)", color:"rgba(232,224,208,0.5)", fontSize:11, outline:"none" }} />
             </div>
 
-            <button
-              onClick={() => {
-                setFOutcome("all");
-                setFSide("all");
-                setFWeekday("ALL");
-                setFrom("");
-                setTo("");
-              }}
-              className="ml-auto px-2 py-2 rounded-xl text-xs font-extrabold border border-white/15 bg-white/5 text-white/80 hover:bg-white/10 transition"
-              title="Clear"
-            >
-              Clear
-            </button>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar…" style={{ height:32, padding:"0 12px", borderRadius:999, border:"1px solid rgba(180,140,80,0.12)", background:"rgba(0,0,0,0.3)", color:"rgba(232,224,208,0.5)", fontSize:11, fontWeight:600, outline:"none", width:120 }} />
+
+            <button onClick={() => { setFOutcome("all"); setFSide("all"); setFWeekday("ALL"); setFrom(""); setTo(""); setQ(""); }} style={{ ...pillStyle(), marginLeft:"auto" }}>Clear</button>
           </div>
         </div>
 
-        {/* Table/List */}
-        <div className={panel}>
+        {/* Lista */}
+        <div style={card}>
           {isMobile ? (
-            <div className="grid gap-3">
+            <div style={{ display:"grid", gap:10 }}>
               {pageItems.length === 0 ? (
-                <div className="py-6 text-white/60">No hay trades con esos filtros.</div>
-              ) : (
-                pageItems.map((t, idx) => {
-                  const globalIndex = (pageSafe - 1) * pageSize + idx + 1;
-                  const d = formatYMD(t.createdAt);
-                  const oc = outcomeBadge(t);
-
-                  return (
-                    <div
-                      key={t.id}
-                      onClick={() => router.push(`/journal/history/${t.id}`)}
-                      className="relative text-left rounded-2xl border border-white/10 bg-white/3 p-4 active:scale-[0.99] transition cursor-pointer"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-xs font-extrabold text-white/50">
-                          #{globalIndex} · {d} · {t.tradeTime || "—"}
-                        </div>
-
-                        <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${sidePill(t.tradeSide)}`}>
-                          {t.tradeSide}
-                        </span>
-                      </div>
-
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${tonePill(oc.tone)}`}>
-                          {oc.text}
-                        </span>
-
-                        <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${tonePill(rrTone(t.rr))}`}>
-                          RR {t.rr == null ? "—" : t.rr.toFixed(2)}
-                        </span>
-
-                        {chip(`Instr: ${t.instrument}`, "muted")}
-                        {t.followedPlan === "yes" ? chip("Plan: Sí", "good") : chip("Plan: No", "danger")}
-                        {t.setupTag === "A"
-                          ? chip("Setup A", "good")
-                          : t.setupTag === "B"
-                          ? chip("Setup B", "warn")
-                          : chip("Setup —")}
-                      </div>
-
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {chip(t.biasShown, t.biasShown === "LONG" ? "good" : t.biasShown === "SHORT" ? "danger" : "muted")}
-                        {chip(
-                          t.marketState,
-                          t.marketState === "EXPANSION"
-                            ? "good"
-                            : t.marketState === "TRANSITION"
-                            ? "danger"
-                            : t.marketState === "DELIVERY_CONDITIONAL"
-                            ? "warn"
-                            : "muted"
-                        )}
-                      </div>
-                      <div className="absolute top-3 right-3 flex gap-1">
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); openEdit(t); }}
-                          className="h-8 w-8 rounded-full border border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white transition"
-                          title="Editar trade"
-                        >
-                          ✎
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => handleDeleteTrade(e, t)}
-                          className="h-8 w-8 rounded-full border border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white transition"
-                          title="Borrar trade"
-                        >
-                          ✕
-                        </button>
-                      </div>
-
-                      {t.note?.trim() ? (
-                        <div className="mt-3 text-sm text-white/70 line-clamp-2">{t.note.trim()}</div>
-                      ) : (
-                        <div className="mt-3 text-sm text-white/40">Sin nota.</div>
-                      )}
+                <div style={{ padding:"32px 0", textAlign:"center", color:"rgba(232,224,208,0.3)", fontSize:13 }}>No hay trades con esos filtros.</div>
+              ) : pageItems.map((t, idx) => {
+                const ok = outcomeKey(t);
+                const globalIndex = (pageSafe - 1) * pageSize + idx + 1;
+                return (
+                  <div key={t.id} onClick={() => router.push(`/journal/history/${t.id}`)}
+                    style={{ position:"relative", padding:"14px 16px", borderRadius:14, cursor:"pointer", transition:"all 0.15s", border:`1px solid ${outcomeBorder(ok)}`, background:outcomeBg(ok) }}>
+                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+                      <span style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.35)" }}>#{globalIndex} · {formatYMD(t.createdAt)} · {t.tradeTime || "—"}</span>
+                      <span style={{ fontSize:13, fontWeight:900, color: outcomeColor(ok) }}>
+                        {ok === "win" ? "✅" : ok === "loss" ? "❌" : ok === "be" ? "◻︎" : "—"}
+                      </span>
                     </div>
-                  );
-                })
-              )}
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                      <Tag color={t.tradeSide === "BUY" ? "#85b0e0" : "#e08888"} border={t.tradeSide === "BUY" ? "rgba(74,126,184,0.35)" : "rgba(184,85,85,0.35)"} bg={t.tradeSide === "BUY" ? "rgba(74,126,184,0.12)" : "rgba(184,85,85,0.12)"}>{t.tradeSide}</Tag>
+                      <Tag>{t.instrument}</Tag>
+                      {t.rr != null && <Tag color="#7dcb9a" border="rgba(74,158,106,0.3)" bg="rgba(74,158,106,0.08)">{t.rr.toFixed(2)}R</Tag>}
+                      {t.setupTag && t.setupTag !== "unknown" && <Tag>{t.setupTag === "A" ? "Setup A" : t.setupTag === "B" ? "Setup B" : t.setupTag}</Tag>}
+                    </div>
+                    {t.note?.trim() && <div style={{ marginTop:8, fontSize:11, color:"rgba(232,224,208,0.35)", overflow:"hidden", display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical" as any }}>{t.note.trim()}</div>}
+                    <div style={{ position:"absolute", top:10, right:10, display:"flex", gap:4 }}>
+                      <button onClick={e => { e.stopPropagation(); openEdit(t); }} style={{ width:28, height:28, borderRadius:999, border:"1px solid rgba(180,140,80,0.15)", background:"rgba(0,0,0,0.3)", color:"rgba(232,224,208,0.4)", fontSize:11, cursor:"pointer" }}>✎</button>
+                      <button onClick={e => handleDelete(e, t)} style={{ width:28, height:28, borderRadius:999, border:"1px solid rgba(184,85,85,0.2)", background:"rgba(184,85,85,0.06)", color:"rgba(224,136,136,0.5)", fontSize:11, cursor:"pointer" }}>✕</button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-260 text-left">
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse" }}>
                 <thead>
-                  <tr className="text-xs font-extrabold text-white/55">
-                    <th className="py-3 pr-4">#</th>
-                    <th className="py-3 pr-4">FECHA</th>
-                    <th className="py-3 pr-4">DÍA</th>
-                    <th className="py-3 pr-4">HORA</th>
-                    <th className="py-3 pr-4">Instrumento</th>
-                    <th className="py-3 pr-4">Dirección</th>
-                    <th className="py-3 pr-4">Resultado</th>
-                    <th className="py-3 pr-4">RR</th>
-                    <th className="py-3 pr-4">Plan</th>
-                    <th className="py-3 pr-4">Setup</th>
-                    <th className="py-3 pr-4">Bias</th>
-                    <th className="py-3 pr-2 text-right">🗑</th>
+                  <tr style={{ borderBottom:"1px solid rgba(180,140,80,0.1)" }}>
+                    {["#","FECHA","DÍA","HORA","INSTR","DIR","RESULTADO","RR","PLAN","SETUP","BIAS",""].map(h => (
+                      <th key={h} style={{ padding:"10px 12px 10px 0", textAlign:"left", fontSize:9, fontWeight:800, letterSpacing:"0.15em", color:"rgba(232,224,208,0.28)", whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
                   </tr>
                 </thead>
-
-                <tbody className="text-sm">
+                <tbody>
                   {pageItems.length === 0 ? (
-                    <tr>
-                      <td colSpan={12} className="py-6 text-white/60">
-                        No hay trades con esos filtros.
-                      </td>
-                    </tr>
-                  ) : (
-                    pageItems.map((t, idx) => {
-                      const globalIndex = (pageSafe - 1) * pageSize + idx + 1;
-                      const d = formatYMD(t.createdAt);
-                      const oc = outcomeBadge(t);
-
-                      return (
-                        <tr
-                          key={t.id}
-                          onClick={() => router.push(`/journal/history/${t.id}`)}
-                          className="border-t border-white/10 transition cursor-pointer hover:bg-white/4 hover:border-white/15"
-                        >
-                          <td className="py-3 pr-4">
-                            <Link
-                              href={`/journal/history/${t.id}`}
-                              className="font-extrabold underline decoration-white/15 hover:decoration-white/70"
-                              onClick={(e) => e.stopPropagation()}
-                              title="Abrir detalle"
-                            >
-                              {globalIndex}
-                            </Link>
-                          </td>
-
-                          <td className="py-3 pr-4 text-white/85">{d}</td>
-                          <td className="py-3 pr-4 text-white/85">{weekdayLabelFromMs(t.createdAt)}</td>
-                          <td className="py-3 pr-4 text-white/85">{t.tradeTime || "—"}</td>
-                          <td className="py-3 pr-4 font-extrabold text-white/90">{t.instrument}</td>
-
-                          <td className="py-3 pr-4">
-                            <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${sidePill(t.tradeSide)}`}>
-                              {t.tradeSide}
-                            </span>
-                          </td>
-
-                          <td className="py-3 pr-4">
-                            <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${tonePill(oc.tone)}`}>
-                              {oc.text}
-                            </span>
-                          </td>
-
-                          <td className="py-3 pr-4">
-                            <span
-                              className={["rounded-full border px-3 py-1 text-xs font-black", tonePill(rrTone(t.rr))].join(" ")}
-                              title="RR del trade"
-                            >
-                              {t.rr == null ? "—" : t.rr.toFixed(2)}
-                            </span>
-                          </td>
-
-                          <td className="py-3 pr-4">{t.followedPlan === "yes" ? chip("Sí", "good") : chip("No", "danger")}</td>
-
-                          <td className="py-3 pr-4">
-                            {t.setupTag === "A"
-                              ? chip("Setup A", "good")
-                              : t.setupTag === "B"
-                              ? chip("Setup B", "warn")
-                              : chip("Setup —")}
-                          </td>
-
-                          <td className="py-3 pr-4">
-                            {chip(t.biasShown, t.biasShown === "LONG" ? "good" : t.biasShown === "SHORT" ? "danger" : "muted")}
-                          </td> 
-                                    
-                          <td className="py-3 pr-2 text-right">
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); openEdit(t); }}
-                              className="h-8 w-8 rounded-full border border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white transition mr-1"
-                              title="Editar trade"
-                            >
-                              ✎
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => handleDeleteTrade(e, t)}
-                              className="h-8 w-8 rounded-full border border-white/15 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white transition"
-                              title="Borrar trade"
-                              aria-label="Borrar trade"
-                            >
-                              ✕
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
+                    <tr><td colSpan={12} style={{ padding:"32px 0", textAlign:"center", color:"rgba(232,224,208,0.3)", fontSize:13 }}>No hay trades con esos filtros.</td></tr>
+                  ) : pageItems.map((t, idx) => {
+                    const ok = outcomeKey(t);
+                    const globalIndex = (pageSafe - 1) * pageSize + idx + 1;
+                    return (
+                      <tr key={t.id} onClick={() => router.push(`/journal/history/${t.id}`)}
+                        style={{ borderBottom:"1px solid rgba(180,140,80,0.07)", cursor:"pointer", transition:"background 0.1s" }}
+                        onMouseEnter={e => (e.currentTarget.style.background = "rgba(200,146,58,0.04)")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <td style={{ padding:"12px 12px 12px 0", fontSize:12 }}>
+                          <Link href={`/journal/history/${t.id}`} onClick={e => e.stopPropagation()} style={{ color:"rgba(200,146,58,0.6)", fontWeight:800, textDecoration:"none" }}>{globalIndex}</Link>
+                        </td>
+                        <td style={{ padding:"12px 12px 12px 0", fontSize:12, color:"rgba(232,224,208,0.6)", whiteSpace:"nowrap" }}>{formatYMD(t.createdAt)}</td>
+                        <td style={{ padding:"12px 12px 12px 0", fontSize:12, color:"rgba(232,224,208,0.4)" }}>{weekdayLabel(t.createdAt)}</td>
+                        <td style={{ padding:"12px 12px 12px 0", fontSize:12, color:"rgba(232,224,208,0.5)" }}>{t.tradeTime || "—"}</td>
+                        <td style={{ padding:"12px 12px 12px 0", fontSize:12, fontWeight:800, color:"rgba(232,224,208,0.7)" }}>{t.instrument}</td>
+                        <td style={{ padding:"12px 12px 12px 0" }}>
+                          <Tag color={t.tradeSide === "BUY" ? "#85b0e0" : "#e08888"} border={t.tradeSide === "BUY" ? "rgba(74,126,184,0.35)" : "rgba(184,85,85,0.35)"} bg={t.tradeSide === "BUY" ? "rgba(74,126,184,0.1)" : "rgba(184,85,85,0.1)"}>{t.tradeSide}</Tag>
+                        </td>
+                        <td style={{ padding:"12px 12px 12px 0" }}>
+                          <Tag color={outcomeColor(ok)} border={outcomeBorder(ok)} bg={outcomeBg(ok)}>
+                            {ok === "win" ? "✅ Win" : ok === "loss" ? "❌ Loss" : ok === "be" ? "◻︎ BE" : "—"}
+                          </Tag>
+                        </td>
+                        <td style={{ padding:"12px 12px 12px 0" }}>
+                          {t.rr != null ? <Tag color="#7dcb9a" border="rgba(74,158,106,0.3)" bg="rgba(74,158,106,0.08)">{t.rr.toFixed(2)}R</Tag> : <span style={{ color:"rgba(232,224,208,0.25)", fontSize:12 }}>—</span>}
+                        </td>
+                        <td style={{ padding:"12px 12px 12px 0" }}>
+                          <Tag color={t.followedPlan === "yes" ? "#7dcb9a" : "#e08888"} border={t.followedPlan === "yes" ? "rgba(74,158,106,0.3)" : "rgba(184,85,85,0.3)"} bg={t.followedPlan === "yes" ? "rgba(74,158,106,0.08)" : "rgba(184,85,85,0.08)"}>{t.followedPlan === "yes" ? "Sí" : "No"}</Tag>
+                        </td>
+                        <td style={{ padding:"12px 12px 12px 0" }}>
+                          {t.setupTag && t.setupTag !== "unknown" ? <Tag>{t.setupTag === "A" ? "Setup A" : t.setupTag === "B" ? "Setup B" : t.setupTag}</Tag> : <span style={{ color:"rgba(232,224,208,0.2)", fontSize:12 }}>—</span>}
+                        </td>
+                        <td style={{ padding:"12px 12px 12px 0" }}>
+                          <Tag color={t.biasShown === "LONG" ? "#7dcb9a" : t.biasShown === "SHORT" ? "#e08888" : "rgba(232,224,208,0.4)"}>{t.biasShown}</Tag>
+                        </td>
+                        <td style={{ padding:"12px 0", textAlign:"right" }}>
+                          <div style={{ display:"flex", gap:4, justifyContent:"flex-end" }}>
+                            <button onClick={e => { e.stopPropagation(); openEdit(t); }} style={{ width:28, height:28, borderRadius:999, border:"1px solid rgba(180,140,80,0.15)", background:"rgba(0,0,0,0.3)", color:"rgba(232,224,208,0.4)", fontSize:11, cursor:"pointer" }}>✎</button>
+                            <button onClick={e => handleDelete(e, t)} style={{ width:28, height:28, borderRadius:999, border:"1px solid rgba(184,85,85,0.2)", background:"rgba(184,85,85,0.06)", color:"rgba(224,136,136,0.5)", fontSize:11, cursor:"pointer" }}>✕</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
 
-          {/* Pagination */}
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <button
-              className={pillBtn}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={pageSafe <= 1}
-              style={{ opacity: pageSafe <= 1 ? 0.5 : 1 }}
-            >
-              ← Prev
-            </button>
-
-            <div className="text-sm text-white/65">
-              Page <b className="text-white/90">{pageSafe}</b> / <b className="text-white/90">{totalPages}</b>
-            </div>
-
-            <button
-              className={pillBtn}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={pageSafe >= totalPages}
-              style={{ opacity: pageSafe >= totalPages ? 0.5 : 1 }}
-            >
-              Next →
-            </button>
+          {/* Paginación */}
+          <div style={{ marginTop:16, display:"flex", alignItems:"center", gap:10 }}>
+            <button onClick={() => setPage(p => Math.max(1, p-1))} disabled={pageSafe <= 1}
+              style={{ ...pillStyle(), opacity: pageSafe <= 1 ? 0.3 : 1 }}>← Prev</button>
+            <span style={{ fontSize:12, color:"rgba(232,224,208,0.35)", fontWeight:600 }}>
+              {pageSafe} / {totalPages} <span style={{ color:"rgba(232,224,208,0.2)" }}>({filtered.length} trades)</span>
+            </span>
+            <button onClick={() => setPage(p => Math.min(totalPages, p+1))} disabled={pageSafe >= totalPages}
+              style={{ ...pillStyle(), opacity: pageSafe >= totalPages ? 0.3 : 1 }}>Next →</button>
           </div>
         </div>
       </div>
-      {/* ── MODAL EDITAR TRADE ── */}
+
+      {/* Modal edición */}
       {editTrade && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="w-full max-w-lg rounded-3xl border border-white/15 bg-neutral-900 p-6 shadow-2xl">
-            <div className="text-lg font-black">Editar trade</div>
-            <div className="mt-1 text-xs text-white/50">{editTrade.id.slice(0, 8)}…</div>
+        <div style={{ position:"fixed", inset:0, zIndex:100, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(4,3,1,0.88)", backdropFilter:"blur(12px)", padding:20 }}>
+          <div style={{ ...card, width:"100%", maxWidth:520, maxHeight:"90vh", overflowY:"auto" }}>
+            <div style={{ fontSize:14, fontWeight:900, color:"rgba(232,224,208,0.88)", marginBottom:4 }}>Editar trade</div>
+            <div style={{ fontSize:10, color:"rgba(232,224,208,0.25)", marginBottom:20 }}>{editTrade.id.slice(0,8)}…</div>
 
-            <div className="mt-5 grid gap-4">
-              {/* Fecha */}
+            <div style={{ display:"grid", gap:14 }}>
               <div>
-                <div className="text-xs font-extrabold text-white/60 mb-1">Fecha</div>
-                <input
-                  type="date"
-                  value={editDate}
-                  onChange={(e) => setEditDate(e.target.value)}
-                  className="h-10 w-full rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none"
-                />
+                <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:6, letterSpacing:"0.15em" }}>FECHA</div>
+                <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)}
+                  style={{ height:36, padding:"0 12px", borderRadius:10, border:"1px solid rgba(180,140,80,0.18)", background:"rgba(0,0,0,0.35)", color:"rgba(232,224,208,0.9)", fontSize:13, fontWeight:600, outline:"none", width:"100%", boxSizing:"border-box" }} />
               </div>
 
-              {/* Hora */}
               <div>
-                <div className="text-xs font-extrabold text-white/60 mb-1">Hora (HH:MM)</div>
-                <input
-                  value={editTime}
-                  onChange={(e) => setEditTime(e.target.value)}
-                  placeholder="HH:MM"
-                  className="h-10 w-32 rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none"
-                />
+                <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:6, letterSpacing:"0.15em" }}>HORA</div>
+                <input value={editTime} onChange={e => setEditTime(e.target.value)} placeholder="HH:MM"
+                  style={{ height:36, padding:"0 12px", borderRadius:10, border:`1px solid ${editTime && !isValidHHMM(editTime) ? "rgba(184,85,85,0.5)" : "rgba(180,140,80,0.18)"}`, background:"rgba(0,0,0,0.35)", color:"rgba(232,224,208,0.9)", fontSize:13, fontWeight:600, outline:"none", width:100 }} />
               </div>
 
-              {/* Instrumento + Side */}
-              <div className="flex flex-wrap gap-3">
+              <div style={{ display:"flex", flexWrap:"wrap", gap:14 }}>
                 <div>
-                  <div className="text-xs font-extrabold text-white/60 mb-1">Instrumento</div>
-                  <div className="flex gap-2">
-                    {(["NQ", "ES"] as Instrument[]).map((ins) => (
-                      <button
-                        key={ins}
-                        onClick={() => setEditInstrument(ins)}
-                        className={`h-9 rounded-xl border px-4 text-sm font-extrabold transition ${editInstrument === ins ? "border-white/30 bg-white/10 text-white" : "border-white/15 bg-white/5 text-white/70"}`}
-                      >
-                        {ins}
-                      </button>
+                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:6, letterSpacing:"0.15em" }}>INSTRUMENTO</div>
+                  <div style={{ display:"flex", gap:6 }}>
+                    {(["NQ","ES"] as Instrument[]).map(ins => (
+                      <button key={ins} onClick={() => setEditInstrument(ins)} style={{ ...pillStyle(editInstrument === ins) }}>{ins}</button>
                     ))}
                   </div>
                 </div>
-
                 <div>
-                  <div className="text-xs font-extrabold text-white/60 mb-1">Dirección</div>
-                  <div className="flex gap-2">
-                    {(["BUY", "SELL"] as TradeSide[]).map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => setEditSide(s)}
-                        className={`h-9 rounded-xl border px-4 text-sm font-extrabold transition ${editSide === s ? "border-white/30 bg-white/10 text-white" : "border-white/15 bg-white/5 text-white/70"}`}
-                      >
-                        {s}
-                      </button>
-                    ))}
+                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:6, letterSpacing:"0.15em" }}>DIRECCIÓN</div>
+                  <div style={{ display:"flex", gap:6 }}>
+                    <button onClick={() => setEditSide("BUY")} style={pillStyle(editSide === "BUY")}>BUY</button>
+                    <button onClick={() => setEditSide("SELL")} style={pillStyle(editSide === "SELL")}>SELL</button>
                   </div>
                 </div>
               </div>
 
-              {/* Resultado + Plan */}
-              <div className="flex flex-wrap gap-3">
+              <div style={{ display:"flex", flexWrap:"wrap", gap:14 }}>
                 <div>
-                  <div className="text-xs font-extrabold text-white/60 mb-1">Resultado</div>
-                  <select
-                    value={editOutcome}
-                    onChange={(e) => setEditOutcome(e.target.value as OutcomeDb)}
-                    className="h-9 rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none"
-                  >
+                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:6, letterSpacing:"0.15em" }}>RESULTADO</div>
+                  <select value={editOutcome} onChange={e => setEditOutcome(e.target.value as OutcomeDb)}
+                    style={{ height:36, padding:"0 10px", borderRadius:10, border:"1px solid rgba(180,140,80,0.18)", background:"rgba(0,0,0,0.4)", color:"rgba(232,224,208,0.8)", fontSize:12, fontWeight:700, outline:"none" }}>
                     <option value="unknown">—</option>
                     <option value="win">Win</option>
                     <option value="loss">Loss</option>
                     <option value="be">BE</option>
                   </select>
                 </div>
-
                 <div>
-                  <div className="text-xs font-extrabold text-white/60 mb-1">RR</div>
-                  <input
-                    value={editRR}
-                    onChange={(e) => setEditRR(e.target.value)}
-                    placeholder="ej: 2.5"
-                    className="h-9 w-24 rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none"
-                  />
+                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:6, letterSpacing:"0.15em" }}>RR</div>
+                  <input value={editRR} onChange={e => setEditRR(e.target.value)} placeholder="2.5"
+                    style={{ height:36, padding:"0 12px", borderRadius:10, border:"1px solid rgba(180,140,80,0.18)", background:"rgba(0,0,0,0.35)", color:"rgba(232,224,208,0.9)", fontSize:13, fontWeight:600, outline:"none", width:80 }} />
                 </div>
-
                 <div>
-                  <div className="text-xs font-extrabold text-white/60 mb-1">Setup</div>
-                  <select
-                    value={editSetup}
-                    onChange={(e) => setEditSetup(e.target.value)}
-                    className="h-9 rounded-xl border border-white/15 bg-white/5 px-3 text-sm font-extrabold text-white outline-none"
-                  >
+                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:6, letterSpacing:"0.15em" }}>SETUP</div>
+                  <select value={editSetup} onChange={e => setEditSetup(e.target.value)}
+                    style={{ height:36, padding:"0 10px", borderRadius:10, border:"1px solid rgba(180,140,80,0.18)", background:"rgba(0,0,0,0.4)", color:"rgba(232,224,208,0.8)", fontSize:12, fontWeight:700, outline:"none" }}>
                     <option value="unknown">—</option>
-                    <option value="A">A</option>
-                    <option value="B">B</option>
+                    <option value="A">Setup A</option>
+                    <option value="B">Setup B</option>
+                    <option value="none">Sin setup</option>
                   </select>
                 </div>
+              </div>
 
-                <div>
-                  <div className="text-xs font-extrabold text-white/60 mb-1">Plan</div>
-                  <div className="flex gap-2">
-                    {(["yes", "no"] as FollowedPlan[]).map((p) => (
-                      <button
-                        key={p}
-                        onClick={() => setEditFollowed(p)}
-                        className={`h-9 rounded-xl border px-4 text-sm font-extrabold transition ${editFollowed === p ? "border-white/30 bg-white/10 text-white" : "border-white/15 bg-white/5 text-white/70"}`}
-                      >
-                        {p === "yes" ? "Cumplí" : "No cumplí"}
-                      </button>
-                    ))}
-                  </div>
+              <div>
+                <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:6, letterSpacing:"0.15em" }}>PLAN</div>
+                <div style={{ display:"flex", gap:6 }}>
+                  <button onClick={() => setEditFollowed("yes")} style={pillStyle(editFollowed === "yes", "green")}>Cumplí ✓</button>
+                  <button onClick={() => setEditFollowed("no")} style={pillStyle(editFollowed === "no", "red")}>No cumplí ✗</button>
                 </div>
               </div>
-              
 
-              {/* Nota */}
               <div>
-                <div className="text-xs font-extrabold text-white/60 mb-1">Nota</div>
-                <textarea
-                  value={editNote}
-                  onChange={(e) => setEditNote(e.target.value)}
-                  rows={3}
-                  className="w-full resize-y rounded-xl border border-white/15 bg-white/5 p-3 text-sm text-white outline-none placeholder:text-white/40"
-                />
+                <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:6, letterSpacing:"0.15em" }}>NOTA</div>
+                <textarea value={editNote} onChange={e => setEditNote(e.target.value)} rows={4}
+                  style={{ width:"100%", padding:"12px", borderRadius:10, border:"1px solid rgba(180,140,80,0.15)", background:"rgba(0,0,0,0.3)", color:"rgba(232,224,208,0.85)", fontSize:13, fontWeight:500, outline:"none", resize:"vertical", lineHeight:1.7, fontFamily:"inherit", boxSizing:"border-box" }} />
               </div>
             </div>
 
-            {/* Botones */}
-            <div className="mt-5 flex gap-3">
-              <button
-                onClick={saveEdit}
-                disabled={editSaving}
-                className="h-11 flex-1 rounded-xl border border-white/20 bg-white/10 text-sm font-extrabold text-white hover:bg-white/15 transition disabled:opacity-50"
-              >
-                {editSaving ? "Guardando…" : "Guardar cambios"}
-              </button>
-              <button
-                onClick={() => setEditTrade(null)}
-                className="h-11 rounded-xl border border-white/15 bg-white/5 px-4 text-sm font-extrabold text-white/70 hover:bg-white/10 transition"
-              >
-                Cancelar
-              </button>
+            <div style={{ marginTop:20, display:"flex", gap:8 }}>
+              <button onClick={saveEdit} disabled={editSaving} style={{
+                flex:1, height:40, borderRadius:999, cursor:"pointer",
+                border:"1px solid rgba(200,146,58,0.38)", background:"rgba(200,146,58,0.09)",
+                color:"#c8923a", fontSize:12, fontWeight:800, opacity: editSaving ? 0.5 : 1,
+              }}>{editSaving ? "Guardando…" : "Guardar cambios"}</button>
+              <button onClick={() => setEditTrade(null)} style={{
+                height:40, padding:"0 18px", borderRadius:999, cursor:"pointer",
+                border:"1px solid rgba(180,140,80,0.12)", background:"transparent",
+                color:"rgba(232,224,208,0.35)", fontSize:12, fontWeight:700,
+              }}>Cancelar</button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

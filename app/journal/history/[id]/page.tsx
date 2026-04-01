@@ -4,32 +4,32 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { getTradeById } from "@/lib/tradesDb";
-
 import type { TradeEntry } from "@/lib/types";
-import {
-  formatYMD,
-  weekdayLabel,
-  outcomeBadge,
-  tonePill,
-  sidePill,
-  rrTone,
-  toneToClasses,
-  normalizeOutcome,
-} from "@/lib/helpers";
+import { formatYMD, weekdayLabel, normalizeOutcome } from "@/lib/helpers";
 
-function chip(s: string, variant: "muted" | "good" | "danger" | "warn" = "muted") {
-  const base = "rounded-full border px-3 py-1 text-xs font-extrabold whitespace-nowrap";
-  return <span className={`${base} ${tonePill(variant)}`}>{s}</span>;
+function outcomeColor(k: string): string {
+  if (k === "win") return "#7dcb9a";
+  if (k === "loss") return "#e08888";
+  if (k === "be") return "#c8923a";
+  return "rgba(232,224,208,0.35)";
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-4">
-      <div className="w-40 shrink-0 text-xs font-extrabold text-white/50 uppercase tracking-wide pt-0.5">
-        {label}
-      </div>
-      <div className="text-sm text-white/90">{children}</div>
+    <div style={{ display:"grid", gridTemplateColumns:"120px 1fr", gap:12, alignItems:"flex-start", padding:"10px 0", borderBottom:"1px solid rgba(180,140,80,0.07)" }}>
+      <div style={{ fontSize:10, fontWeight:800, letterSpacing:"0.14em", color:"rgba(232,224,208,0.28)", paddingTop:2 }}>{label}</div>
+      <div style={{ fontSize:13, color:"rgba(232,224,208,0.8)", fontWeight:600 }}>{children}</div>
     </div>
+  );
+}
+
+function Tag({ children, color = "rgba(232,224,208,0.5)", bg = "rgba(255,255,255,0.04)", border = "rgba(180,140,80,0.15)" }: {
+  children: React.ReactNode; color?: string; bg?: string; border?: string;
+}) {
+  return (
+    <span style={{ height:24, padding:"0 10px", display:"inline-flex", alignItems:"center", borderRadius:999, border:`1px solid ${border}`, background:bg, fontSize:11, fontWeight:700, color }}>
+      {children}
+    </span>
   );
 }
 
@@ -44,7 +44,6 @@ export default function TradeDetailPage() {
 
   useEffect(() => {
     if (!id) return;
-
     const supabase = getSupabaseClient();
     if (!supabase) return;
 
@@ -53,224 +52,201 @@ export default function TradeDetailPage() {
         const { data } = await supabase.auth.getSession();
         const uid = data.session?.user?.id;
         if (!uid) { router.replace("/login"); return; }
-
         const t = await getTradeById(uid, id);
         if (!t) { setError("Trade no encontrado."); return; }
-
         setTrade(t as TradeEntry);
-      } catch (e) {
-        console.error(e);
-        setError("Error al cargar el trade.");
-      } finally {
-        setLoading(false);
-      }
+      } catch { setError("Error al cargar el trade."); }
+      finally { setLoading(false); }
     })();
   }, [id, router]);
 
-  const panel = "rounded-2xl border border-white/10 bg-white/[0.04] p-5 shadow-[0_18px_40px_rgba(0,0,0,0.45)]";
+  const card: React.CSSProperties = {
+    background: "rgba(10,8,5,0.82)", border: "1px solid rgba(180,140,80,0.14)",
+    borderRadius: 16, padding: "20px 22px",
+    backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)",
+  };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-neutral-950 text-white">
-        <div className="mx-auto max-w-3xl px-4 py-8 text-white/60">Cargando…</div>
-      </div>
-    );
-  }
-
-  if (error || !trade) {
-    return (
-      <div className="min-h-screen bg-neutral-950 text-white">
-        <div className="mx-auto max-w-3xl px-4 py-8">
-          <div className="text-red-300">{error ?? "Trade no encontrado."}</div>
-          <button
-            onClick={() => router.push("/journal/history")}
-            className="mt-4 h-10 rounded-xl border border-white/15 bg-white/5 px-4 text-sm font-extrabold text-white hover:bg-white/10 transition"
-          >
-            ← Volver al historial
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const oc = outcomeBadge(trade);
-  const outcome = normalizeOutcome(trade.outcome);
+  const outcome = trade ? normalizeOutcome(trade.outcome) : "unknown";
+  const oc = outcomeColor(outcome);
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white">
-      <div className="mx-auto max-w-3xl px-4 py-8">
+    <>
+      {/* BG */}
+      <div style={{ position:"fixed", inset:0, zIndex:0, backgroundImage:"url('/PM_SCALPS_BG.png')", backgroundSize:"cover", backgroundPosition:"center" }} />
+      <div style={{ position:"fixed", inset:0, zIndex:1, background:"rgba(6,4,2,0.78)", backgroundImage:"radial-gradient(ellipse 100% 45% at 50% 0%, rgba(150,90,20,0.22) 0%, transparent 60%)" }} />
 
-        {/* ── Breadcrumb ── */}
-        <button
-          onClick={() => router.push("/journal/history")}
-          className="text-xs font-extrabold text-white/50 hover:text-white/80 transition"
-        >
-          ← Historial
-        </button>
+      <div style={{ position:"relative", zIndex:2, maxWidth:700, margin:"0 auto", padding:"24px 20px 48px" }}>
 
-        {/* ── Título ── */}
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-black">
-            {weekdayLabel(trade.createdAt)} {formatYMD(trade.createdAt)}
-          </h1>
-          {trade.tradeTime && (
-            <span className="text-sm font-extrabold text-white/50">{trade.tradeTime}</span>
-          )}
-          <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${tonePill(oc.tone)}`}>
-            {oc.text}
-          </span>
-          {trade.tradeTaken === "yes" && (
-            <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${sidePill(trade.tradeSide)}`}>
-              {trade.tradeSide}
-            </span>
-          )}
-        </div>
+        {/* Back */}
+        <button onClick={() => router.push("/journal/history")} style={{
+          background:"none", border:"none", cursor:"pointer",
+          fontSize:12, fontWeight:700, color:"rgba(200,146,58,0.5)",
+          display:"flex", alignItems:"center", gap:6, marginBottom:20, padding:0,
+        }}>← Volver al historial</button>
 
-        {/* ── Imagen ── */}
-        {trade.imgUrl && (
-          <div className="mt-6">
-            <img
-              src={trade.imgUrl}
-              alt="Chart"
-              className="rounded-2xl border border-white/10 w-full max-h-[500px] object-contain bg-black/30"
-            />
+        {loading && (
+          <div style={{ textAlign:"center", color:"rgba(232,224,208,0.3)", fontSize:13, padding:"48px 0" }}>Cargando…</div>
+        )}
+
+        {error && (
+          <div style={{ ...card, textAlign:"center" }}>
+            <div style={{ color:"#e08888", fontSize:13, marginBottom:16 }}>{error}</div>
+            <button onClick={() => router.push("/journal/history")} style={{ height:36, padding:"0 20px", borderRadius:999, border:"1px solid rgba(180,140,80,0.2)", background:"transparent", color:"rgba(200,146,58,0.6)", fontSize:12, fontWeight:700, cursor:"pointer" }}>← Volver</button>
           </div>
         )}
 
-        {/* ── Trade info ── */}
-        {trade.tradeTaken === "yes" && (
-          <div className={`mt-6 ${panel}`}>
-            <div className="text-xs font-extrabold tracking-[0.16em] text-white/50 mb-4">TRADE</div>
-            <div className="grid gap-3">
-              <Row label="Instrumento">{trade.instrument}</Row>
-              <Row label="Dirección">
-                <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${sidePill(trade.tradeSide)}`}>
-                  {trade.tradeSide}
-                </span>
-              </Row>
-              <Row label="Resultado">
-                <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${tonePill(oc.tone)}`}>
-                  {oc.text}
-                </span>
-              </Row>
-              <Row label="RR">
-                <span className={`rounded-full border px-3 py-1 text-xs font-black ${tonePill(rrTone(trade.rr))}`}>
-                  {trade.rr == null ? "—" : trade.rr.toFixed(2)}
-                </span>
-              </Row>
-              {trade.partialRRs?.length ? (
-              <Row label="Parciales">
-                <div className="flex flex-wrap gap-2">
-                  {trade.partialRRs.map((rr, i) => (
-                    <span key={i} className="rounded-full border border-emerald-400/30 bg-emerald-500/10 text-emerald-100 px-3 py-1 text-xs font-black">
-                      TP{i + 1}: {rr}R
-                    </span>
-                  ))}
+        {trade && (
+          <div style={{ display:"grid", gap:12 }}>
+            {/* Header card */}
+            <div style={{ ...card, borderColor: outcome === "win" ? "rgba(74,158,106,0.3)" : outcome === "loss" ? "rgba(184,85,85,0.3)" : "rgba(200,146,58,0.2)", background: outcome === "win" ? "rgba(74,158,106,0.06)" : outcome === "loss" ? "rgba(184,85,85,0.06)" : "rgba(200,146,58,0.05)" }}>
+              <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:12 }}>
+                <div>
+                  <div style={{ fontSize:10, fontWeight:800, letterSpacing:"0.2em", color:"rgba(232,224,208,0.3)", marginBottom:4 }}>
+                    {weekdayLabel(trade.createdAt)} · {formatYMD(trade.createdAt)}
+                    {trade.tradeTime && <span style={{ marginLeft:8, color:"rgba(232,224,208,0.25)" }}>{trade.tradeTime}</span>}
+                  </div>
+                  <div style={{ fontSize:28, fontWeight:900, color: oc }}>
+                    {outcome === "win" ? "✅ Win" : outcome === "loss" ? "❌ Loss" : outcome === "be" ? "◻︎ Break Even" : "—"}
+                  </div>
                 </div>
-              </Row>
-            ) : null}
-              <Row label="Setup">
-                {trade.setupTag === "A" ? chip("Setup A", "good")
-                  : trade.setupTag === "B" ? chip("Setup B", "warn")
-                  : chip("—")}
-              </Row>
-              <Row label="Siguió el plan">
-                {trade.followedPlan === "yes" ? chip("Sí ✓", "good") : chip("No ✗", "danger")}
-              </Row>
-              <Row label="App ayudó">
-                {trade.helped ? chip("Sí", "good") : chip("No", "muted")}
-              </Row>
+
+                <div style={{ marginLeft:"auto", display:"flex", flexWrap:"wrap", gap:8, alignItems:"center" }}>
+                  {trade.rr != null && (
+                    <div style={{ textAlign:"center" }}>
+                      <div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.14em", color:"rgba(232,224,208,0.25)", marginBottom:2 }}>RR</div>
+                      <div style={{ fontSize:22, fontWeight:900, color:"#7dcb9a" }}>{trade.rr.toFixed(2)}R</div>
+                    </div>
+                  )}
+                  <Tag color={trade.tradeSide === "BUY" ? "#85b0e0" : "#e08888"} border={trade.tradeSide === "BUY" ? "rgba(74,126,184,0.35)" : "rgba(184,85,85,0.35)"} bg={trade.tradeSide === "BUY" ? "rgba(74,126,184,0.12)" : "rgba(184,85,85,0.12)"}>{trade.tradeSide}</Tag>
+                  <Tag>{trade.instrument}</Tag>
+                </div>
+              </div>
+            </div>
+
+            {/* Imagen */}
+            {trade.imgUrl && (
+              <div style={card}>
+                <div style={{ fontSize:10, fontWeight:800, letterSpacing:"0.18em", color:"rgba(232,224,208,0.28)", marginBottom:12 }}>CAPTURA</div>
+                <img src={trade.imgUrl} alt="Chart" style={{ width:"100%", borderRadius:10, border:"1px solid rgba(180,140,80,0.12)", maxHeight:500, objectFit:"contain", background:"rgba(0,0,0,0.3)" }} />
+              </div>
+            )}
+
+            {/* Trade info */}
+            {trade.tradeTaken === "yes" && (
+              <div style={card}>
+                <div style={{ fontSize:10, fontWeight:800, letterSpacing:"0.18em", color:"rgba(232,224,208,0.28)", marginBottom:4 }}>TRADE</div>
+                <div>
+                  <Row label="INSTRUMENTO">{trade.instrument}</Row>
+                  <Row label="DIRECCIÓN">
+                    <Tag color={trade.tradeSide === "BUY" ? "#85b0e0" : "#e08888"} border={trade.tradeSide === "BUY" ? "rgba(74,126,184,0.35)" : "rgba(184,85,85,0.35)"} bg={trade.tradeSide === "BUY" ? "rgba(74,126,184,0.1)" : "rgba(184,85,85,0.1)"}>{trade.tradeSide}</Tag>
+                  </Row>
+                  <Row label="RESULTADO">
+                    <Tag color={oc}>{outcome === "win" ? "Win" : outcome === "loss" ? "Loss" : outcome === "be" ? "BE" : "—"}</Tag>
+                  </Row>
+                  {trade.rr != null && (
+                    <Row label="RR">
+                      <Tag color="#7dcb9a" border="rgba(74,158,106,0.3)" bg="rgba(74,158,106,0.08)">{trade.rr.toFixed(2)}R</Tag>
+                    </Row>
+                  )}
+                  {/* Parciales */}
+                  {(trade as any).partialRRs?.length > 0 && (
+                    <Row label="PARCIALES">
+                      <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                        {(trade as any).partialRRs.map((rr: number, i: number) => (
+                          <Tag key={i} color="#7dcb9a" border="rgba(74,158,106,0.25)" bg="rgba(74,158,106,0.06)">TP{i+1}: {rr}R</Tag>
+                        ))}
+                      </div>
+                    </Row>
+                  )}
+                  <Row label="SETUP">
+                    {trade.setupTag === "A" ? <Tag color="#c8923a" border="rgba(200,146,58,0.3)" bg="rgba(200,146,58,0.08)">Setup A</Tag>
+                    : trade.setupTag === "B" ? <Tag color="#85b0e0" border="rgba(74,126,184,0.3)" bg="rgba(74,126,184,0.08)">Setup B</Tag>
+                    : <span style={{ color:"rgba(232,224,208,0.3)" }}>—</span>}
+                  </Row>
+                  <Row label="PLAN">
+                    <Tag color={trade.followedPlan === "yes" ? "#7dcb9a" : "#e08888"} border={trade.followedPlan === "yes" ? "rgba(74,158,106,0.3)" : "rgba(184,85,85,0.3)"} bg={trade.followedPlan === "yes" ? "rgba(74,158,106,0.08)" : "rgba(184,85,85,0.08)"}>
+                      {trade.followedPlan === "yes" ? "Cumplí el plan" : "No cumplí"}
+                    </Tag>
+                  </Row>
+                </div>
+              </div>
+            )}
+
+            {trade.tradeTaken === "no" && (
+              <div style={{ ...card, color:"rgba(232,224,208,0.35)", fontSize:13, textAlign:"center" }}>
+                No se tomó trade en esta sesión — registro de análisis.
+              </div>
+            )}
+
+            {/* Contexto */}
+            <div style={card}>
+              <div style={{ fontSize:10, fontWeight:800, letterSpacing:"0.18em", color:"rgba(232,224,208,0.28)", marginBottom:4 }}>CONTEXTO ICT</div>
+              <div>
+                <Row label="BIAS">
+                  <Tag color={trade.biasShown === "LONG" ? "#7dcb9a" : trade.biasShown === "SHORT" ? "#e08888" : "#c8923a"}>{trade.biasShown}</Tag>
+                </Row>
+                <Row label="ESTADO MERCADO">
+                  <Tag color={trade.marketState === "EXPANSION" ? "#7dcb9a" : trade.marketState === "TRANSITION" ? "#e08888" : "#c8923a"}>{trade.marketState}</Tag>
+                </Row>
+                <Row label="LIQUIDEZ">
+                  <Tag color={trade.liqTaken === "yes" ? "#7dcb9a" : "rgba(232,224,208,0.4)"}>{trade.liqTaken === "yes" ? "Tomada" : trade.liqTaken === "no" ? "No tomada" : "—"}</Tag>
+                </Row>
+                {trade.lastTaken && (
+                  <Row label="ÚLTIMA LIQ">
+                    <Tag>{trade.lastTaken}</Tag>
+                  </Row>
+                )}
+                <Row label="REACCIÓN">
+                  <Tag color={trade.reaction === "accept" ? "#7dcb9a" : trade.reaction === "absorb" ? "#e08888" : "rgba(232,224,208,0.4)"}>
+                    {trade.reaction === "accept" ? "Aceptación" : trade.reaction === "absorb" ? "Absorción" : "No claro"}
+                  </Tag>
+                </Row>
+                <Row label="FVG">
+                  <Tag color={trade.hasFvg === "yes" ? "#7dcb9a" : trade.hasFvg === "no" ? "#e08888" : "rgba(232,224,208,0.35)"}>
+                    {trade.hasFvg === "yes" ? "Sí" : trade.hasFvg === "no" ? "No" : "—"}
+                  </Tag>
+                </Row>
+                {(trade as any).invalidationKind && (
+                  <Row label="INVALIDACIÓN">
+                    <Tag color="#c8923a" border="rgba(200,146,58,0.3)" bg="rgba(200,146,58,0.08)">{(trade as any).invalidationKind}</Tag>
+                  </Row>
+                )}
+                {trade.takenLevels?.length > 0 && (
+                  <Row label="NIVELES TOMADOS">
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+                      {trade.takenLevels.map(l => <Tag key={l}>{l}</Tag>)}
+                    </div>
+                  </Row>
+                )}
+                {trade.pendingLevels?.length > 0 && (
+                  <Row label="PENDIENTES">
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+                      {trade.pendingLevels.map(l => <Tag key={l}>{l}</Tag>)}
+                    </div>
+                  </Row>
+                )}
+              </div>
+            </div>
+
+            {/* Nota */}
+            {trade.note?.trim() && (
+              <div style={card}>
+                <div style={{ fontSize:10, fontWeight:800, letterSpacing:"0.18em", color:"rgba(232,224,208,0.28)", marginBottom:12 }}>NOTA</div>
+                <p style={{ fontSize:13, color:"rgba(232,224,208,0.72)", lineHeight:1.75, margin:0, whiteSpace:"pre-wrap" }}>{trade.note.trim()}</p>
+              </div>
+            )}
+
+            {/* Volver */}
+            <div style={{ paddingTop:8 }}>
+              <button onClick={() => router.push("/journal/history")} style={{
+                height:38, padding:"0 20px", borderRadius:999, cursor:"pointer",
+                border:"1px solid rgba(180,140,80,0.18)", background:"transparent",
+                color:"rgba(200,146,58,0.55)", fontSize:12, fontWeight:700,
+              }}>← Volver al historial</button>
             </div>
           </div>
         )}
-
-        {trade.tradeTaken === "no" && (
-          <div className={`mt-6 ${panel}`}>
-            <div className="text-sm text-white/60">No se tomó trade en esta sesión.</div>
-          </div>
-        )}
-
-        {/* ── Contexto de mercado ── */}
-        <div className={`mt-4 ${panel}`}>
-          <div className="text-xs font-extrabold tracking-[0.16em] text-white/50 mb-4">CONTEXTO</div>
-          <div className="grid gap-3">
-            <Row label="Bias">
-              {chip(
-                trade.biasShown,
-                trade.biasShown === "LONG" ? "good"
-                  : trade.biasShown === "SHORT" ? "danger"
-                  : "muted"
-              )}
-            </Row>
-            <Row label="Estado mercado">
-              {chip(
-                trade.marketState,
-                trade.marketState === "EXPANSION" ? "good"
-                  : trade.marketState === "TRANSITION" ? "danger"
-                  : trade.marketState === "DELIVERY_CONDITIONAL" ? "warn"
-                  : "muted"
-              )}
-            </Row>
-            <Row label="Liquidez tomada">
-              {chip(trade.liqTaken, trade.liqTaken === "yes" ? "good" : "muted")}
-            </Row>
-            {trade.lastTaken && (
-              <Row label="Última tomada">{trade.lastTaken}</Row>
-            )}
-            <Row label="Reacción">
-              {chip(
-                trade.reaction,
-                trade.reaction === "accept" ? "good"
-                  : trade.reaction === "absorb" ? "danger"
-                  : "muted"
-              )}
-            </Row>
-            <Row label="FVG">{chip(trade.hasFvg, trade.hasFvg === "yes" ? "good" : trade.hasFvg === "no" ? "danger" : "muted")}</Row>
-            {trade.invalidationHappened === "yes" && (
-              <Row label="Invalidación">
-                {chip(trade.invalidationKind ?? "—", "warn")}
-              </Row>
-            )}
-            {trade.takenLevels?.length > 0 && (
-              <Row label="Niveles tomados">
-                <div className="flex flex-wrap gap-1">
-                  {trade.takenLevels.map((l) => (
-                    <span key={l} className={`rounded-full border px-2 py-0.5 text-xs font-extrabold ${tonePill("muted")}`}>{l}</span>
-                  ))}
-                </div>
-              </Row>
-            )}
-            {trade.pendingLevels?.length > 0 && (
-              <Row label="Pendientes">
-                <div className="flex flex-wrap gap-1">
-                  {trade.pendingLevels.map((l) => (
-                    <span key={l} className={`rounded-full border px-2 py-0.5 text-xs font-extrabold ${tonePill("muted")}`}>{l}</span>
-                  ))}
-                </div>
-              </Row>
-            )}
-          </div>
-        </div>
-
-        {/* ── Nota ── */}
-        {trade.note?.trim() && (
-          <div className={`mt-4 ${panel}`}>
-            <div className="text-xs font-extrabold tracking-[0.16em] text-white/50 mb-3">NOTA</div>
-            <p className="text-sm text-white/85 whitespace-pre-wrap leading-relaxed">{trade.note.trim()}</p>
-          </div>
-        )}
-
-        {/* ── Volver ── */}
-        <div className="mt-8">
-          <button
-            onClick={() => router.push("/journal/history")}
-            className="h-10 rounded-xl border border-white/15 bg-white/5 px-4 text-sm font-extrabold text-white hover:bg-white/10 transition"
-          >
-            ← Volver al historial
-          </button>
-        </div>
-
       </div>
-    </div>
+    </>
   );
 }
