@@ -843,6 +843,117 @@ export default function Page() {
               )}
             </div>
 
+            {/* ── ACTUALIZACIÓN DE DELIVERY M15 ── */}
+            <div style={{ ...card, marginTop: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <div>
+                  <span style={{ ...lbl, marginBottom: 0 }}>ACTUALIZACIÓN DE DELIVERY · M15</span>
+                  <div style={{ fontSize: 11, color: "rgba(232,224,208,0.28)", marginTop: 4 }}>
+                    Lunch / tarde — ¿el precio cambió el estado de la entrega?
+                  </div>
+                </div>
+                {invalidationHappened !== "unknown" && (
+                  <ResetBtn onClick={() => {
+                    setInvalidationHappened("unknown");
+                    setInvalidationKind(null);
+                    setM15Imbalance(null);
+                  }} />
+                )}
+              </div>
+
+              {/* Pregunta principal */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                <Btn active={invalidationHappened === "no"} variant="green"
+                  onClick={() => {
+                    setInvalidationHappened(invalidationHappened === "no" ? "unknown" : "no");
+                    setInvalidationKind(null);
+                    setM15Imbalance(null);
+                  }}>
+                  No cambió
+                </Btn>
+                <Btn active={invalidationHappened === "yes"} variant="red"
+                  onClick={() => {
+                    setInvalidationHappened(invalidationHappened === "yes" ? "unknown" : "yes");
+                    setInvalidationKind(invalidationHappened === "yes" ? null : "M15");
+                    setM15Imbalance(null);
+                  }}>
+                  Cambió en M15
+                </Btn>
+              </div>
+
+              {/* No cambió */}
+              {invalidationHappened === "no" && (
+                <div style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(74,158,106,0.22)", background: "rgba(74,158,106,0.05)", fontSize: 12, color: "rgba(125,203,154,0.65)" }}>
+                  Plan original vigente. Seguí con el sesgo del análisis de sesión.
+                </div>
+              )}
+
+              {/* Cambió en M15 — pregunta displacement */}
+              {invalidationHappened === "yes" && (
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "rgba(232,224,208,0.45)", marginBottom: 10 }}>
+                    ¿Hubo displacement / imbalance en la ruptura?
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                    <Btn active={m15Imbalance === "yes"} variant="green"
+                      onClick={() => setM15Imbalance(m15Imbalance === "yes" ? null : "yes")}>
+                      Sí — con displacement
+                    </Btn>
+                    <Btn active={m15Imbalance === "no"} variant="amber"
+                      onClick={() => setM15Imbalance(m15Imbalance === "no" ? null : "no")}>
+                      No — sin displacement
+                    </Btn>
+                  </div>
+
+                  {/* Output: con displacement → REVERSAL */}
+                  {m15Imbalance === "yes" && (
+                    <div style={{ padding: "14px 16px", borderRadius: 12, border: "1px solid rgba(184,85,85,0.3)", background: "rgba(184,85,85,0.06)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                        <div style={{ fontSize: 13, fontWeight: 900, color: "#e08888" }}>TRANSITION</div>
+                        <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.3)", letterSpacing: "0.12em" }}>CAMBIO DE DELIVERY CONFIRMADO</div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "rgba(232,224,208,0.55)", lineHeight: 1.6 }}>
+                        Shift M15 con displacement real. El delivery anterior quedó invalidado.<br />
+                        <span style={{ color: "rgba(184,85,85,0.7)", fontWeight: 700 }}>Nueva dirección operable: {context.biasShown === "LONG" ? "SHORT" : context.biasShown === "SHORT" ? "LONG" : context.biasShown}</span>
+                      </div>
+                      <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
+                        {[
+                          "1 · Cancelá el plan anterior. No persigas la ruptura.",
+                          "2 · Marcá la zona de retest: FVG M15 + OB / Breaker.",
+                          "3 · Esperá que el precio vuelva a esa zona y rechace.",
+                          "4 · Solo entrás con confirmación M5 limpia.",
+                          "5 · Si M15 sostiene → ok. Si anula el displacement → WAIT.",
+                        ].map((s, i) => (
+                          <div key={i} style={{ fontSize: 11, color: "rgba(232,224,208,0.4)", display: "flex", gap: 6 }}>
+                            <span style={{ color: "rgba(184,85,85,0.5)", fontWeight: 800, flexShrink: 0 }}>→</span>
+                            {s}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Output: sin displacement → WAIT */}
+                  {m15Imbalance === "no" && (
+                    <div style={{ padding: "12px 14px", borderRadius: 10, border: "1px solid rgba(200,146,58,0.25)", background: "rgba(200,146,58,0.05)" }}>
+                      <div style={{ fontSize: 13, fontWeight: 900, color: "#c8923a", marginBottom: 6 }}>DELIVERY CONDITIONAL</div>
+                      <div style={{ fontSize: 12, color: "rgba(232,224,208,0.5)", lineHeight: 1.6 }}>
+                        Rompió algo en M15 pero sin expansion clara ni imbalance.<br />
+                        Intención no confirmada — pasás a <span style={{ color: "#c8923a", fontWeight: 800 }}>WAIT</span> hasta que aparezca un movimiento con intención real que genere una nueva lectura.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Sin responder */}
+                  {m15Imbalance === null && (
+                    <div style={{ fontSize: 11, color: "rgba(232,224,208,0.28)" }}>
+                      Respondé si hubo displacement para completar la lectura.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* Checklist */}
             <div style={{ ...card, marginTop: 10 }}>
               <span style={lbl}>CHECKLIST ANTES DE OPERAR</span>
