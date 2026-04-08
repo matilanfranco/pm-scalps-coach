@@ -9,7 +9,6 @@ export type Level =
   | "LONDON_L"
   | "WEEKLY_H"
   | "WEEKLY_L";
-  
 
 export type Side = "buyside" | "sellside";
 export type Reaction = "accept" | "absorb" | "unclear";
@@ -21,6 +20,7 @@ export type OutcomeDb = "win" | "loss" | "be" | "unknown";
 export type OutcomeForm = "PROFIT" | "STOP" | "BE" | "NONE";
 export type InvalidationKind = "M5" | "M15";
 export type YesNo = "yes" | "no";
+export type M15Confirmed = "yes" | "no" | null;
 
 export type MarketState =
   | "EXPANSION"
@@ -29,7 +29,6 @@ export type MarketState =
   | "REVERSAL_CONFIRMED"
   | "CHOP_NO_TRADE"
   | "WAIT";
-
 
 export type BiasShown = "LONG" | "SHORT" | "WAIT" | "NO TRADE";
 
@@ -50,6 +49,7 @@ export type TradeEntry = {
   invalidationHappened: "yes" | "no" | "unknown";
   invalidationKind: InvalidationKind | null;
   m15Imbalance: YesNo | null;
+  m15Confirmed: M15Confirmed;
   suggestedTargets: Level[];
 
   // trade
@@ -62,8 +62,6 @@ export type TradeEntry = {
   setupTag: SetupTag;
   outcome: OutcomeDb;
   note: string;
-  numPartials?: number | null;
-  partialRRs?: number[] | null;
 
   // imagen
   imgUrl?: string | null;

@@ -1,7 +1,7 @@
 // lib/journalLogic.ts
 // Toda la lógica de inferencia del journal — bias, market state, delivery, invalidation guide
 
-import type { Level, InvalidationKind, YesNo } from "./types";
+import type { Level, InvalidationKind, YesNo, M15Confirmed } from "./types";
 
 // ─── Types locales ────────────────────────────────────────
 
@@ -48,6 +48,8 @@ export type JournalContextArgs = {
   invalidationHappened: "yes" | "no" | "unknown";
   invalidationKind: InvalidationKind | null;
   m15Imbalance: YesNo | null;
+  // ✅ Nuevo: M15 confirmó cambio de estructura post-absorción
+  m15Confirmed: M15Confirmed;
 };
 
 export type JournalContextResult = {
@@ -134,15 +136,40 @@ export function suggestTargets(pending: Level[], bias: BiasShown): Level[] {
 
 // ─── Bias base (sin invalidación) ─────────────────────────
 
-function inferBiasBase(lastTaken: Level | null, reaction: Reaction): { bias: BiasShown; reason: string } {
+function inferBiasBase(
+  lastTaken: Level | null,
+  reaction: Reaction,
+  m15Confirmed: M15Confirmed
+): { bias: BiasShown; reason: string } {
   if (!lastTaken || reaction === "unclear")
     return { bias: "WAIT", reason: "Falta claridad post-toma. Seguí como espectador." };
 
   const side = levelSide(lastTaken);
-  if (side === "buyside" && reaction === "accept") return { bias: "LONG", reason: "Aceptación post-buyside (continuación probable)." };
-  if (side === "buyside" && reaction === "absorb") return { bias: "SHORT", reason: "Absorción post-buyside (reversal probable)." };
-  if (side === "sellside" && reaction === "accept") return { bias: "SHORT", reason: "Aceptación post-sellside (continuación probable)." };
-  if (side === "sellside" && reaction === "absorb") return { bias: "LONG", reason: "Absorción post-sellside (reversal probable)." };
+
+  // Aceptación — continuación directa, no necesita confirmación M15
+  if (side === "buyside" && reaction === "accept")
+    return { bias: "LONG", reason: "Aceptación post-buyside. Continuación probable." };
+  if (side === "sellside" && reaction === "accept")
+    return { bias: "SHORT", reason: "Aceptación post-sellside. Continuación probable." };
+
+  // Absorción — requiere confirmar que M15 cambió estructura
+  // Sin esa confirmación el sesgo NO se flipea automáticamente
+  if (reaction === "absorb") {
+    if (m15Confirmed === "yes") {
+      // M15 confirmó → flip real
+      if (side === "buyside")
+        return { bias: "SHORT", reason: "Absorción post-buyside + BOS/CHoCH M15 confirmado. Reversal operativo." };
+      return { bias: "LONG", reason: "Absorción post-sellside + BOS/CHoCH M15 confirmado. Reversal operativo." };
+    }
+    if (m15Confirmed === "no") {
+      // M15 sigue igual → la absorción fue un retroceso, no un reversal
+      if (side === "buyside")
+        return { bias: "LONG", reason: "Absorción post-buyside pero M15 no cambió estructura. Retroceso probable — plan original vigente." };
+      return { bias: "SHORT", reason: "Absorción post-sellside pero M15 no cambió estructura. Retroceso probable — plan original vigente." };
+    }
+    // No respondió aún → WAIT hasta confirmar
+    return { bias: "WAIT", reason: "Absorción detectada. ¿M15 confirmó cambio de estructura (BOS/CHoCH)? Respondé para definir el sesgo." };
+  }
 
   return { bias: "WAIT", reason: "Caso raro. Esperá confirmación." };
 }
@@ -247,13 +274,14 @@ export function inferBias(args: JournalContextArgs): JournalContextResult {
   const {
     liqTaken, lastTaken, reaction, pendingLevels,
     invalidationHappened, invalidationKind, m15Imbalance,
+    m15Confirmed,
   } = args;
 
-  // Bias base
+  // Bias base — absorción ahora requiere m15Confirmed
   const modeNoLiq = reaction === "accept" ? "EXPANSION" : reaction === "absorb" ? "RANGE" : "UNCLEAR";
   const baseBias: BiasShown = liqTaken === "no"
     ? modeNoLiq === "RANGE" ? "NO TRADE" : "WAIT"
-    : inferBiasBase(lastTaken, reaction).bias;
+    : inferBiasBase(lastTaken, reaction, m15Confirmed).bias;
 
   // Bias con invalidación
   let biasShown: BiasShown = baseBias;

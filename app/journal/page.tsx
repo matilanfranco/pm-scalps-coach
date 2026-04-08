@@ -210,6 +210,7 @@ export default function Page() {
   const [invalidationHappened, setInvalidationHappened] = useState<"yes"|"no"|"unknown">("unknown");
   const [invalidationKind, setInvalidationKind] = useState<InvalidationKind|null>(null);
   const [m15Imbalance, setM15Imbalance] = useState<YesNo|null>(null);
+  const [m15Confirmed, setM15Confirmed] = useState<"yes"|"no"|null>(null);
   const [preStep, setPreStep] = useState<Step>(1);
 
   // ── Chart ──
@@ -228,7 +229,8 @@ export default function Page() {
   const context = useMemo(() => inferBias({
     liqTaken, takenLevels, lastTaken, reaction, hasFvg,
     pendingLevels, invalidationHappened, invalidationKind, m15Imbalance,
-  }), [liqTaken, takenLevels, lastTaken, reaction, hasFvg, pendingLevels, invalidationHappened, invalidationKind, m15Imbalance]);
+    m15Confirmed,
+  }), [liqTaken, takenLevels, lastTaken, reaction, hasFvg, pendingLevels, invalidationHappened, invalidationKind, m15Imbalance, m15Confirmed]);
 
   const computedRR = useMemo(() => {
     const filled = partialRRs.slice(0, numPartials).map(parseRR).filter((v): v is number => v !== null);
@@ -278,7 +280,7 @@ export default function Page() {
     setLiqTaken("unknown"); setTakenLevels([]); setLastTaken(null);
     setReaction("unclear"); setHasFvg("skip"); setPendingLevels([]);
     setInvalidationHappened("unknown"); setInvalidationKind(null);
-    setM15Imbalance(null); setPreStep(1);
+    setM15Imbalance(null); setM15Confirmed(null); setPreStep(1);
   }
 
   async function uploadChart(opts?: { tradeId?: string }) {
@@ -799,11 +801,47 @@ export default function Page() {
                     {liqTaken === "yes" ? "4 · Post-toma: ¿aceptación o absorción?" : "4 · ¿Seguís esperando evento?"}
                   </div>
                   {liqTaken === "yes" && (
-                    <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-                      <Btn active={reaction === "accept"} variant="green" onClick={() => setReaction(reaction === "accept" ? "unclear" : "accept")}>Aceptación</Btn>
-                      <Btn active={reaction === "absorb"} variant="red" onClick={() => setReaction(reaction === "absorb" ? "unclear" : "absorb")}>Absorción</Btn>
-                      <Btn active={reaction === "unclear"} onClick={() => setReaction("unclear")}>No claro</Btn>
-                    </div>
+                    <>
+                      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                        <Btn active={reaction === "accept"} variant="green" onClick={() => { setReaction(reaction === "accept" ? "unclear" : "accept"); setM15Confirmed(null); }}>Aceptación</Btn>
+                        <Btn active={reaction === "absorb"} variant="red" onClick={() => { setReaction(reaction === "absorb" ? "unclear" : "absorb"); setM15Confirmed(null); }}>Absorción</Btn>
+                        <Btn active={reaction === "unclear"} onClick={() => { setReaction("unclear"); setM15Confirmed(null); }}>No claro</Btn>
+                      </div>
+
+                      {/* ✅ Pregunta extra solo cuando hay absorción */}
+                      {reaction === "absorb" && (
+                        <div style={{ padding: "14px 16px", borderRadius: 12, border: "1px solid rgba(200,146,58,0.2)", background: "rgba(200,146,58,0.04)", marginBottom: 14 }}>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: "rgba(200,146,58,0.7)", marginBottom: 10 }}>
+                            ¿M15 confirmó cambio de estructura? (BOS / CHoCH)
+                          </div>
+                          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                            <Btn active={m15Confirmed === "yes"} variant="red"
+                              onClick={() => setM15Confirmed(m15Confirmed === "yes" ? null : "yes")}>
+                              Sí — cambió M15
+                            </Btn>
+                            <Btn active={m15Confirmed === "no"} variant="amber"
+                              onClick={() => setM15Confirmed(m15Confirmed === "no" ? null : "no")}>
+                              No — M15 sigue igual
+                            </Btn>
+                          </div>
+                          {m15Confirmed === null && (
+                            <div style={{ fontSize: 11, color: "rgba(232,224,208,0.28)" }}>
+                              Sin confirmar → el sesgo queda en WAIT hasta que respondas.
+                            </div>
+                          )}
+                          {m15Confirmed === "no" && (
+                            <div style={{ fontSize: 11, color: "rgba(200,146,58,0.6)", marginTop: 4 }}>
+                              La absorción fue un retroceso, no un reversal. Plan original vigente.
+                            </div>
+                          )}
+                          {m15Confirmed === "yes" && (
+                            <div style={{ fontSize: 11, color: "rgba(224,136,136,0.7)", marginTop: 4 }}>
+                              Reversal confirmado. Nuevo sesgo activo — esperá retest a PD Array antes de entrar.
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </>
                   )}
                   {liqTaken === "no" && <div style={{ fontSize: 11, color: "rgba(232,224,208,0.32)", marginBottom: 16 }}>Sin sweep, tu edge exige paciencia.</div>}
                   <div style={{ display: "flex", gap: 8 }}>
