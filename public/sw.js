@@ -1,5 +1,5 @@
 const CACHE = "pm-scalps-v1";
-const STATIC = ["/", "/journal", "/journal/history"];
+const STATIC = ["/journal", "/journal/history"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
@@ -18,17 +18,30 @@ self.addEventListener("activate", (e) => {
 });
 
 self.addEventListener("fetch", (e) => {
-  // Solo GET, no APIs externas
   if (e.request.method !== "GET") return;
-  if (e.request.url.includes("supabase")) return;
+  // No interceptar API calls ni supabase
+  const url = e.request.url;
+  if (url.includes("supabase") || url.includes("/api/") || url.includes("anthropic")) return;
 
   e.respondWith(
     fetch(e.request)
       .then((res) => {
-        const clone = res.clone();
-        caches.open(CACHE).then((cache) => cache.put(e.request, clone));
+        // Solo cachear respuestas válidas
+        if (res && res.status === 200 && res.type === "basic") {
+          const clone = res.clone();
+          caches.open(CACHE).then((cache) => cache.put(e.request, clone));
+        }
         return res;
       })
-      .catch(() => caches.match(e.request))
+      .catch(() => {
+        return caches.match(e.request).then((cached) => {
+          if (cached) return cached;
+          // Fallback para navegación — devolver página principal
+          if (e.request.destination === "document") {
+            return caches.match("/journal");
+          }
+          return new Response("Offline", { status: 503 });
+        });
+      })
   );
 });

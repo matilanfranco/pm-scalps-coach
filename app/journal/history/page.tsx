@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, Suspense } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabaseClient";
@@ -13,7 +13,7 @@ const LS_OBJECTIVE = "pm_scalps_objectives_v1";
 
 type OutcomeKey = "all" | OutcomeDb;
 type Weekday = "ALL" | "Lunes" | "Martes" | "Miércoles" | "Jueves" | "Viernes";
-type ChartMode = "none" | "equity" | "marketstate";
+type ChartMode = "none" | "equity" | "marketstate" | "ai";
 
 function weekdayEs(ms: number): Weekday {
   const d = new Date(ms).getDay();
@@ -63,6 +63,296 @@ function obdr(k:OutcomeDb){return k==="win"?"rgba(74,158,106,0.35)":k==="loss"?"
 function Tag({children,color="rgba(232,224,208,0.35)",bg="rgba(255,255,255,0.04)",border="rgba(180,140,80,0.12)"}:{children:React.ReactNode;color?:string;bg?:string;border?:string}){
   return <span style={{height:24,padding:"0 10px",display:"inline-flex",alignItems:"center",borderRadius:999,border:`1px solid ${border}`,background:bg,fontSize:11,fontWeight:700,color,whiteSpace:"nowrap"}}>{children}</span>;
 }
+
+// ─── AI Analysis ───────────────────────────────────
+const LS_ANALYSES = "pm_scalps_analyses_v1";
+
+type SavedAnalysis = {
+  id: string;
+  date: string;
+  timestamp: number;
+  scope: string;
+  tradeCount: number;
+  text: string;
+};
+
+function AIAnalysis({ trades }: { trades: TradeEntry[] }) {
+  const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [analysis, setAnalysis] = useState("");
+  const [scope, setScope] = useState<"last20" | "last10" | "all">("last20");
+  const [showHistory, setShowHistory] = useState(false);
+  const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalysis[]>([]);
+  const [selectedSaved, setSelectedSaved] = useState<SavedAnalysis | null>(null);
+
+  const scopeLabel = { last20: "últimos 20", last10: "últimos 10", all: `todos (${trades.length})` };
+
+  // Cargar análisis guardados
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(LS_ANALYSES) || "[]") as SavedAnalysis[];
+      setSavedAnalyses(saved.sort((a, b) => b.timestamp - a.timestamp));
+    } catch {}
+  }, []);
+
+  function saveAnalysis(text: string, scopeUsed: string, count: number) {
+    const newEntry: SavedAnalysis = {
+      id: Date.now().toString(),
+      date: new Date().toLocaleDateString("es-AR", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+      timestamp: Date.now(),
+      scope: scopeUsed,
+      tradeCount: count,
+      text,
+    };
+    try {
+      const existing = JSON.parse(localStorage.getItem(LS_ANALYSES) || "[]") as SavedAnalysis[];
+      const updated = [newEntry, ...existing].slice(0, 20); // máximo 20 análisis
+      localStorage.setItem(LS_ANALYSES, JSON.stringify(updated));
+      setSavedAnalyses(updated);
+    } catch {}
+  }
+
+  function deleteAnalysis(id: string) {
+    const updated = savedAnalyses.filter(a => a.id !== id);
+    localStorage.setItem(LS_ANALYSES, JSON.stringify(updated));
+    setSavedAnalyses(updated);
+    if (selectedSaved?.id === id) setSelectedSaved(null);
+  }
+
+  function buildPrompt(ts: TradeEntry[]): string {
+    const sorted = [...ts].sort((a, b) => a.createdAt - b.createdAt);
+    const wins = sorted.filter(t => outcomeKey(t) === "win");
+    const losses = sorted.filter(t => outcomeKey(t) === "loss");
+    const bes = sorted.filter(t => outcomeKey(t) === "be");
+    const winRRs = wins.map(t => Number(t.rr)).filter(n => Number.isFinite(n));
+    const avgWinRR = winRRs.length ? (winRRs.reduce((a, b) => a + b, 0) / winRRs.length).toFixed(2) : "N/A";
+    const netRR = (winRRs.reduce((a, b) => a + b, 0) - losses.length).toFixed(2);
+    const wr = wins.length + losses.length > 0 ? ((wins.length / (wins.length + losses.length)) * 100).toFixed(1) : "N/A";
+    const rows = sorted.map((t, i) => {
+      const ok = outcomeKey(t);
+      const date = new Date(t.createdAt).toLocaleDateString("es-AR", { day: "numeric", month: "short" });
+      const rr = t.rr != null ? `${t.rr}R` : "—";
+      const note = (t.note || "").slice(0, 200).replace(/\n/g, " ");
+      return `${i + 1}. [${date} ${t.tradeTime || ""}] ${t.instrument} ${t.tradeSide} | ${ok.toUpperCase()} ${rr} | Setup:${t.setupTag || "?"} Plan:${t.followedPlan} | Estado:${t.marketState} | "${note}"`;
+    }).join("\n");
+
+    return `Sos un coach de trading ICT especializado en futuros (NQ/ES), PM session de NY (13-16hs). Analizá el siguiente journal de trading y dame un análisis concreto y honesto.
+
+ESTADÍSTICAS DEL PERÍODO:
+- Trades analizados: ${sorted.length}
+- Wins: ${wins.length} | Losses: ${losses.length} | BE: ${bes.length}
+- Winrate: ${wr}%
+- RR promedio en wins: ${avgWinRR}R
+- Net RR: ${netRR}R
+
+TRADES (del más antiguo al más reciente):
+${rows}
+
+CONTEXTO IMPORTANTE:
+- El trader opera ICT: SMT, CISD, FVG, OB, Breaker, CRT H1, AMD
+- Setup A = OB + FVG + OTE + Confirmación M5 → target 2-3R
+- Setup B = FVG + Confirmación M5 → target 1.5R
+- Regla personal: si ganó el primer trade del día, no opera más
+- Límite: 2 SLs en el día → cerrar plataforma
+- Opera principalmente SELL (mejor winrate histórico que BUY)
+
+Dame el análisis en estas secciones, en español, siendo directo y sin suavizar:
+
+**1. ESTADO ACTUAL** (2-3 líneas del momento del sistema)
+
+**2. PATRONES POSITIVOS** (qué está funcionando bien, con ejemplos de los trades)
+
+**3. ERRORES RECURRENTES** (los 2-3 errores más costosos con trades específicos como ejemplo)
+
+**4. EL TRADE IDEAL TUYO** (basado en los datos, describí el perfil exacto de su mejor trade)
+
+**5. UNA SOLA COSA A CAMBIAR** (la modificación de mayor impacto para la próxima semana)`;
+  }
+
+  async function runAnalysis() {
+    setStatus("loading");
+    setAnalysis("");
+    setSelectedSaved(null);
+
+    const subset = scope === "last10"
+      ? [...trades].sort((a, b) => b.createdAt - a.createdAt).slice(0, 10)
+      : scope === "last20"
+      ? [...trades].sort((a, b) => b.createdAt - a.createdAt).slice(0, 20)
+      : trades;
+
+    try {
+      const response = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1000,
+          messages: [{ role: "user", content: buildPrompt(subset) }],
+        }),
+      });
+
+      const data = await response.json();
+      const text = data.content?.[0]?.text || "";
+      setAnalysis(text);
+      setStatus("done");
+      saveAnalysis(text, scopeLabel[scope], subset.length);
+    } catch {
+      setStatus("error");
+    }
+  }
+
+  function renderMarkdown(text: string) {
+    return text.split("\n").map((line, i) => {
+      const parts = line.split(/\*\*(.*?)\*\*/g).map((part, j) =>
+        j % 2 === 1
+          ? <strong key={j} style={{ color: "rgba(232,224,208,0.9)", fontWeight: 800 }}>{part}</strong>
+          : <span key={j}>{part}</span>
+      );
+      return (
+        <p key={i} style={{
+          margin: line.startsWith("**") ? "16px 0 4px" : "0 0 6px",
+          fontSize: line.startsWith("**") ? 12 : 13,
+          color: "rgba(232,224,208,0.72)",
+          lineHeight: 1.7,
+        }}>
+          {parts}
+        </p>
+      );
+    });
+  }
+
+  const displayAnalysis = selectedSaved?.text || analysis;
+
+  return (
+    <div style={{ marginTop: 16 }}>
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.18em", color: "rgba(232,224,208,0.28)", marginBottom: 4 }}>✦ ANÁLISIS CON IA</div>
+          <div style={{ fontSize: 11, color: "rgba(232,224,208,0.35)" }}>Claude analiza tus trades y te da feedback de coach ICT</div>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {/* Historial button */}
+          {savedAnalyses.length > 0 && (
+            <button onClick={() => { setShowHistory(v => !v); setSelectedSaved(null); }} style={{
+              height: 28, padding: "0 12px", borderRadius: 999, cursor: "pointer",
+              border: `1px solid ${showHistory ? "rgba(200,146,58,0.5)" : "rgba(180,140,80,0.15)"}`,
+              background: showHistory ? "rgba(200,146,58,0.1)" : "transparent",
+              color: showHistory ? "#c8923a" : "rgba(232,224,208,0.4)",
+              fontSize: 11, fontWeight: 700,
+            }}>
+              📋 {savedAnalyses.length} análisis guardado{savedAnalyses.length !== 1 ? "s" : ""}
+            </button>
+          )}
+          {/* Scope selector */}
+          {!showHistory && (
+            <div style={{ display: "flex", gap: 6 }}>
+              {(["last10", "last20", "all"] as const).map(s => (
+                <button key={s} onClick={() => setScope(s)} style={{
+                  height: 28, padding: "0 12px", borderRadius: 999, cursor: "pointer",
+                  border: `1px solid ${scope === s ? "rgba(74,158,106,0.5)" : "rgba(180,140,80,0.12)"}`,
+                  background: scope === s ? "rgba(74,158,106,0.12)" : "transparent",
+                  color: scope === s ? "#7dcb9a" : "rgba(232,224,208,0.35)",
+                  fontSize: 11, fontWeight: 700,
+                }}>
+                  {scopeLabel[s]}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Historial de análisis guardados */}
+      {showHistory && (
+        <div style={{ marginBottom: 16 }}>
+          {savedAnalyses.length === 0 ? (
+            <div style={{ fontSize: 12, color: "rgba(232,224,208,0.3)", padding: "12px 0" }}>No hay análisis guardados aún.</div>
+          ) : (
+            <div style={{ display: "grid", gap: 8 }}>
+              {savedAnalyses.map(a => (
+                <div key={a.id} style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "10px 14px", borderRadius: 10, cursor: "pointer",
+                  border: `1px solid ${selectedSaved?.id === a.id ? "rgba(200,146,58,0.4)" : "rgba(180,140,80,0.12)"}`,
+                  background: selectedSaved?.id === a.id ? "rgba(200,146,58,0.07)" : "rgba(0,0,0,0.15)",
+                  transition: "all 0.15s",
+                }} onClick={() => setSelectedSaved(selectedSaved?.id === a.id ? null : a)}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "rgba(232,224,208,0.75)" }}>{a.date}</div>
+                    <div style={{ fontSize: 11, color: "rgba(232,224,208,0.35)", marginTop: 2 }}>
+                      {a.tradeCount} trades · {a.scope}
+                    </div>
+                  </div>
+                  <button onClick={e => { e.stopPropagation(); deleteAnalysis(a.id); }} style={{
+                    width: 24, height: 24, borderRadius: 999, border: "1px solid rgba(184,85,85,0.2)",
+                    background: "rgba(184,85,85,0.06)", color: "rgba(224,136,136,0.5)",
+                    fontSize: 10, cursor: "pointer", flexShrink: 0,
+                  }}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Idle */}
+      {!showHistory && status === "idle" && !selectedSaved && (
+        <div style={{ textAlign: "center", padding: "24px 0" }}>
+          <button onClick={runAnalysis} style={{
+            height: 42, padding: "0 28px", borderRadius: 999, cursor: "pointer",
+            border: "1px solid rgba(74,158,106,0.4)", background: "rgba(74,158,106,0.1)",
+            color: "#7dcb9a", fontSize: 13, fontWeight: 800, letterSpacing: "0.06em",
+          }}>
+            ✦ Analizar {scopeLabel[scope]} trades
+          </button>
+          <div style={{ marginTop: 10, fontSize: 11, color: "rgba(232,224,208,0.28)" }}>El análisis tarda ~10 segundos</div>
+        </div>
+      )}
+
+      {/* Loading */}
+      {status === "loading" && (
+        <div style={{ padding: "32px 0", textAlign: "center" }}>
+          <div style={{ fontSize: 13, color: "rgba(74,158,106,0.6)", fontWeight: 700, marginBottom: 8 }}>Analizando tus trades…</div>
+          <div style={{ fontSize: 11, color: "rgba(232,224,208,0.3)" }}>Claude está revisando patrones, errores y fortalezas</div>
+          <div style={{ marginTop: 16, height: 2, background: "rgba(180,140,80,0.1)", borderRadius: 999, overflow: "hidden", maxWidth: 200, margin: "16px auto 0" }}>
+            <div style={{ height: "100%", background: "rgba(74,158,106,0.6)", borderRadius: 999, animation: "pm-loading 2s ease-in-out infinite", width: "40%" }} />
+          </div>
+        </div>
+      )}
+
+      {/* Error */}
+      {status === "error" && (
+        <div style={{ padding: "20px", borderRadius: 12, border: "1px solid rgba(184,85,85,0.25)", background: "rgba(184,85,85,0.06)", textAlign: "center" }}>
+          <div style={{ fontSize: 13, color: "#e08888", marginBottom: 8 }}>Error al conectar con la IA</div>
+          <button onClick={() => setStatus("idle")} style={{ height: 32, padding: "0 16px", borderRadius: 999, border: "1px solid rgba(184,85,85,0.3)", background: "transparent", color: "#e08888", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Reintentar</button>
+        </div>
+      )}
+
+      {/* Resultado — nuevo o guardado */}
+      {(status === "done" || selectedSaved) && displayAnalysis && (
+        <div>
+          {selectedSaved && (
+            <div style={{ fontSize: 11, color: "rgba(200,146,58,0.5)", fontWeight: 700, marginBottom: 10 }}>
+              📋 {selectedSaved.date} · {selectedSaved.tradeCount} trades · {selectedSaved.scope}
+            </div>
+          )}
+          <div style={{ borderRadius: 12, border: "1px solid rgba(74,158,106,0.15)", background: "rgba(74,158,106,0.04)", padding: "18px 20px" }}>
+            {renderMarkdown(displayAnalysis)}
+          </div>
+          <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+            <button onClick={() => { setStatus("idle"); setAnalysis(""); setSelectedSaved(null); setShowHistory(false); }} style={{
+              height: 32, padding: "0 16px", borderRadius: 999, cursor: "pointer",
+              border: "1px solid rgba(180,140,80,0.15)", background: "transparent",
+              color: "rgba(232,224,208,0.4)", fontSize: 11, fontWeight: 700,
+            }}>Nuevo análisis</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 // ─── Equity Curve ──────────────────────────────────
 function EquityCurve({trades}:{trades:TradeEntry[]}) {
@@ -311,7 +601,7 @@ function DailyObjective() {
 }
 
 // ─── Main ──────────────────────────────────────────
-function HistoryPageInner() {
+export default function HistoryPage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -497,6 +787,9 @@ function HistoryPageInner() {
           <button onClick={()=>setChartMode(chartMode==="marketstate"?"none":"marketstate")} style={pill(chartMode==="marketstate","amber")}>
             {chartMode==="marketstate"?"▲":"▼"} Stats por contexto
           </button>
+          <button onClick={()=>setChartMode(chartMode==="ai"?"none":"ai")} style={pill(chartMode==="ai","green")}>
+            {chartMode==="ai"?"▲":"▼"} ✦ Análisis IA
+          </button>
         </div>
 
         {/* Chart panel */}
@@ -504,6 +797,7 @@ function HistoryPageInner() {
           <div style={{...card,marginBottom:12}}>
             {chartMode==="equity"&&<EquityCurve trades={allTrades}/>}
             {chartMode==="marketstate"&&<MarketStateStats trades={filtered}/>}
+            {chartMode==="ai"&&<AIAnalysis trades={filtered.length>0?filtered:allTrades}/>}
           </div>
         )}
 
@@ -702,11 +996,3 @@ function HistoryPageInner() {
     </>
   );
 }
-
-    export default function HistoryPage() {
-    return (
-      <Suspense fallback={<div style={{ minHeight:"100vh", background:"#0c0a07" }} />}>
-        <HistoryPageInner />
-      </Suspense>
-    );
-  }
