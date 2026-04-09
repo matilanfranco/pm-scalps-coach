@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { listTradesSince, deleteTrade, updateTrade } from "@/lib/tradesDb";
 import type { TradeEntry, Instrument, TradeSide, FollowedPlan, OutcomeDb, SetupTag } from "@/lib/types";
@@ -313,6 +313,8 @@ function DailyObjective() {
 // ─── Main ──────────────────────────────────────────
 export default function HistoryPage() {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const isMobile = useIsMobile();
 
   const [supabase, setSupabase] = useState<ReturnType<typeof getSupabaseClient>|null>(null);
@@ -322,14 +324,31 @@ export default function HistoryPage() {
   const [userId, setUserId] = useState<string|null>(null);
   const [chartMode, setChartMode] = useState<ChartMode>("none");
 
-  const [fOutcome, setFOutcome] = useState<OutcomeKey>("all");
-  const [fSide, setFSide] = useState<"all"|TradeSide>("all");
-  const [fWeekday, setFWeekday] = useState<Weekday>("ALL");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [q, setQ] = useState("");
-  const [page, setPage] = useState(1);
+  // Filtros — inicializados desde URL params para persistencia
+  const [fOutcome, setFOutcome] = useState<OutcomeKey>((searchParams?.get("outcome") as OutcomeKey) || "all");
+  const [fSide, setFSide] = useState<"all"|TradeSide>((searchParams?.get("side") as TradeSide) || "all");
+  const [fWeekday, setFWeekday] = useState<Weekday>((searchParams?.get("day") as Weekday) || "ALL");
+  const [from, setFrom] = useState(searchParams?.get("from") || "");
+  const [to, setTo] = useState(searchParams?.get("to") || "");
+  const [q, setQ] = useState(searchParams?.get("q") || "");
+  const [page, setPage] = useState(Number(searchParams?.get("p") || 1));
   const pageSize = 15;
+
+  // Sincronizar filtros → URL sin recargar
+  const updateUrl = useCallback((overrides: Record<string,string> = {}) => {
+    const params = new URLSearchParams();
+    const vals: Record<string,string> = {
+      outcome: fOutcome, side: fSide, day: fWeekday,
+      from, to, q, p: String(page), ...overrides,
+    };
+    Object.entries(vals).forEach(([k, v]) => {
+      if (v && v !== "all" && v !== "ALL" && v !== "" && v !== "1") params.set(k, v);
+    });
+    const qs = params.toString();
+    window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
+  }, [fOutcome, fSide, fWeekday, from, to, q, page, pathname]);
+
+  useEffect(() => { updateUrl(); }, [fOutcome, fSide, fWeekday, from, to, q, page]);
 
   const [editTrade, setEditTrade] = useState<TradeEntry|null>(null);
   const [editDate, setEditDate] = useState("");
@@ -363,7 +382,20 @@ export default function HistoryPage() {
     return()=>{alive=false;};
   },[supabase]);
 
-  useEffect(()=>{setPage(1);},[fOutcome,fSide,fWeekday,from,to,q]);
+  // URL de retorno con filtros — se pasa al detalle para poder volver
+  const backUrl = useCallback((tradeId: string) => {
+    const params = new URLSearchParams();
+    if (fOutcome !== "all") params.set("outcome", fOutcome);
+    if (fSide !== "all") params.set("side", fSide);
+    if (fWeekday !== "ALL") params.set("day", fWeekday);
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    if (q) params.set("q", q);
+    if (page > 1) params.set("p", String(page));
+    const qs = params.toString();
+    const returnUrl = qs ? `/journal/history?${qs}` : "/journal/history";
+    return `/journal/history/${tradeId}?back=${encodeURIComponent(returnUrl)}`;
+  }, [fOutcome, fSide, fWeekday, from, to, q, page]);
 
   const filtered = useMemo(()=>{
     const ql=q.trim().toLowerCase();
@@ -379,6 +411,7 @@ export default function HistoryPage() {
       return true;
     }).sort((a,b)=>b.createdAt-a.createdAt);
   },[allTrades,fOutcome,fSide,fWeekday,from,to,q]);
+  useEffect(()=>{setPage(1);},[fOutcome,fSide,fWeekday,from,to,q]);
 
   const kpis = useMemo(()=>computeKPIs(filtered),[filtered]);
   const totalPages = Math.max(1,Math.ceil(filtered.length/pageSize));
@@ -510,7 +543,7 @@ export default function HistoryPage() {
                 const ok=outcomeKey(t);
                 const gi=(pageSafe-1)*pageSize+idx+1;
                 return (
-                  <div key={t.id} onClick={()=>router.push(`/journal/history/${t.id}`)}
+                  <div key={t.id} onClick={()=>router.push(backUrl(t.id))}
                     style={{position:"relative",padding:"14px 16px",borderRadius:14,cursor:"pointer",border:`1px solid ${obdr(ok)}`,background:ob(ok)}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
                       <span style={{fontSize:10,fontWeight:800,color:"rgba(232,224,208,0.35)"}}>#{gi} · {formatYMD(t.createdAt)} · {t.tradeTime||"—"}</span>
@@ -548,12 +581,12 @@ export default function HistoryPage() {
                     const ok=outcomeKey(t);
                     const gi=(pageSafe-1)*pageSize+idx+1;
                     return (
-                      <tr key={t.id} onClick={()=>router.push(`/journal/history/${t.id}`)}
+                      <tr key={t.id} onClick={()=>router.push(backUrl(t.id))}
                         style={{borderBottom:"1px solid rgba(180,140,80,0.07)",cursor:"pointer",transition:"background 0.1s"}}
                         onMouseEnter={e=>(e.currentTarget.style.background="rgba(200,146,58,0.04)")}
                         onMouseLeave={e=>(e.currentTarget.style.background="transparent")}>
                         <td style={{padding:"12px 12px 12px 0",fontSize:12}}>
-                          <Link href={`/journal/history/${t.id}`} onClick={e=>e.stopPropagation()} style={{color:"rgba(200,146,58,0.6)",fontWeight:800,textDecoration:"none"}}>{gi}</Link>
+                          <Link href={backUrl(t.id)} onClick={e=>e.stopPropagation()} style={{color:"rgba(200,146,58,0.6)",fontWeight:800,textDecoration:"none"}}>{gi}</Link>
                         </td>
                         <td style={{padding:"12px 12px 12px 0",fontSize:12,color:"rgba(232,224,208,0.6)",whiteSpace:"nowrap"}}>{formatYMD(t.createdAt)}</td>
                         <td style={{padding:"12px 12px 12px 0",fontSize:12,color:"rgba(232,224,208,0.4)"}}>{weekdayLabel(t.createdAt)}</td>
