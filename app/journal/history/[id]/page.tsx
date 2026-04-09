@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { getTradeById } from "@/lib/tradesDb";
@@ -169,7 +169,7 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
 }
 
 // ─── Main ──────────────────────────────────────────
-export default function TradeDetailPage() {
+function TradeDetailInner() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -400,5 +400,13 @@ export default function TradeDetailPage() {
         )}
       </div>
     </>
+  );
+}
+
+export default function TradeDetailPage() {
+  return (
+    <Suspense fallback={<div style={{ minHeight:"100vh", background:"#0c0a07" }} />}>
+      <TradeDetailInner />
+    </Suspense>
   );
 }

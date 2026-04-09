@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabaseClient";
@@ -311,7 +311,7 @@ function DailyObjective() {
 }
 
 // ─── Main ──────────────────────────────────────────
-export default function HistoryPage() {
+function HistoryPageInner() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -702,3 +702,11 @@ export default function HistoryPage() {
     </>
   );
 }
+
+    export default function HistoryPage() {
+    return (
+      <Suspense fallback={<div style={{ minHeight:"100vh", background:"#0c0a07" }} />}>
+        <HistoryPageInner />
+      </Suspense>
+    );
+  }
