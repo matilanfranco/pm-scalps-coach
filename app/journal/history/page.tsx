@@ -252,6 +252,8 @@ No una lista. Una. Concreta, específica, que arranque con acción.
 "Antes de entrar...", "La próxima vez que veas...", "Cuando M15..."
 Terminá con algo que lo deje con ganas de abrir la plataforma mañana.
 
+IMPORTANTE: El análisis completo no debe superar 1200 palabras. No repitas información entre secciones. Si en una sección hay poco para decir, sé breve — no rellenes. Si hay mucho, expandite. Priorizá siempre ejemplos concretos sobre explicaciones genéricas.
+
 ═══ LOS TRADES ═══
 
 ${rows}`;
@@ -273,7 +275,7 @@ ${rows}`;
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 1500,
+          max_tokens: 2500,
           messages: [{ role: "user", content: buildPrompt(subset) }],
         }),
       });
