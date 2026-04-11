@@ -303,7 +303,18 @@ function AIAnalysis({ trades }: { trades: TradeEntry[] }): React.ReactElement {
       const date = new Date(t.createdAt).toLocaleDateString("es-AR", { day: "numeric", month: "short" });
       const rr = t.rr != null ? `${t.rr}R` : "—";
       const note = (t.note || "").slice(0, 300).replace(/\n/g, " ");
-      return `${i + 1}. [${date} ${t.tradeTime || "??:??"}] ${t.instrument} ${t.tradeSide} | ${ok.toUpperCase()} ${rr} | Plan:${t.followedPlan} | "${note}"`;
+      const ctx = (t as any);
+      // Contexto de sesión
+      const ctxParts = [
+        ctx.contextTag ? `Cat:${ctx.contextTag}` : null,
+        ctx.htfStruct ? `HTF:${ctx.htfStruct}${ctx.htfAligned !== null ? (ctx.htfAligned ? "(favor)" : "(contra)") : ""}` : null,
+        ctx.amDir ? `AM:${ctx.amDir}` : null,
+        ctx.amSweepNivel ? `SweepAp:${ctx.amSweepNivel}/${ctx.amReac || "?"}` : null,
+        ctx.pmSweepNivel ? `SweepSes:${ctx.pmSweepNivel}/${ctx.pmReac || "?"}` : null,
+        ctx.m15Struct ? `M15:${ctx.m15Struct}` : null,
+        ctx.cisdDir ? `CISD:${ctx.cisdDir}` : null,
+      ].filter(Boolean).join(" | ");
+      return `${i + 1}. [${date} ${t.tradeTime || "??:??"}] ${t.instrument} ${t.tradeSide} | ${ok.toUpperCase()} ${rr} | Plan:${t.followedPlan}${ctxParts ? ` | [${ctxParts}]` : ""} | "${note}"`;
     }).join("\n");
 
     return `Sos el coach de trading de Mati. Lo conocés hace tiempo, sabés cómo piensa y sobre todo — sabés lo que es capaz de hacer cuando está afilado.
@@ -408,6 +419,23 @@ No una lista. Una. Concreta, específica, que arranque con acción.
 Terminá con algo que lo deje con ganas de abrir la plataforma mañana.
 
 IMPORTANTE: El análisis completo no debe superar 1200 palabras. No repitas información entre secciones. Si en una sección hay poco para decir, sé breve — no rellenes. Si hay mucho, expandite. Priorizá siempre ejemplos concretos sobre explicaciones genéricas.
+
+IMPORTANTE: Cada trade puede tener un bloque de contexto entre corchetes con estos campos:
+- Cat: categoría del trade (CONT-AM / CONT-AM-SWEEP / REVERSAL-SWEEP / REVERSAL-NO-SWEEP)
+- HTF: estructura H1/H4 y si el trade fue a favor o en contra
+- AM: dirección que tuvo el precio en la sesión AM
+- SweepAp: nivel tomado en la apertura + reacción (absorbio/acepto)
+- SweepSes: nivel tomado en la sesión + reacción
+- M15: estructura M15 al momento de entrar
+- CISD: dirección del CISD M15 si hubo cambio de delivery
+
+Usá estos datos para detectar patrones específicos, por ejemplo:
+- ¿En qué categorías ganó más? ¿Cuándo falló más?
+- ¿Hay correlación entre SweepAp + SweepSes en extremos opuestos y los mejores trades?
+- ¿Cuándo el HTF estaba en contra, cómo le fue?
+- ¿Los CISD bajistas con AM bajista dieron mejores resultados que sin CISD?
+
+IMPORTANTE: Cada trade puede tener o no tener contexto. Los que no tienen [contexto] son trades viejos sin datos de sesión — no los uses para sacar conclusiones de contexto, solo de resultado y nota.
 
 ═══ LOS TRADES ═══
 
