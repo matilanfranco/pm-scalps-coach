@@ -15,6 +15,7 @@ const LS_ANALYSES = "pm_scalps_analyses_v1";
 type OutcomeKey = "all" | OutcomeDb;
 type Weekday = "ALL" | "Lunes" | "Martes" | "Miércoles" | "Jueves" | "Viernes";
 type ChartMode = "none" | "weekly" | "equity" | "marketstate" | "ai";
+type ContextFilter = "all" | "CONT-AM" | "CONT-AM-SWEEP" | "REVERSAL-SWEEP" | "REVERSAL-NO-SWEEP";
 
 type SavedAnalysis = {
   id: string;
@@ -899,6 +900,7 @@ function HistoryPageInner(): React.ReactElement {
   const [fOutcome, setFOutcome] = useState<OutcomeKey>((searchParams?.get("outcome") as OutcomeKey) || "all");
   const [fSide, setFSide] = useState<"all" | TradeSide>((searchParams?.get("side") as TradeSide) || "all");
   const [fWeekday, setFWeekday] = useState<Weekday>((searchParams?.get("day") as Weekday) || "ALL");
+  const [fContext, setFContext] = useState<ContextFilter>((searchParams?.get("ctx") as ContextFilter) || "all");
   const [from, setFrom] = useState(searchParams?.get("from") || "");
   const [to, setTo] = useState(searchParams?.get("to") || "");
   const [q, setQ] = useState(searchParams?.get("q") || "");
@@ -910,15 +912,16 @@ function HistoryPageInner(): React.ReactElement {
     if (fOutcome !== "all") params.set("outcome", fOutcome);
     if (fSide !== "all") params.set("side", fSide);
     if (fWeekday !== "ALL") params.set("day", fWeekday);
+    if (fContext !== "all") params.set("ctx", fContext);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
     if (q) params.set("q", q);
     if (page > 1) params.set("p", String(page));
     const qs = params.toString();
     window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
-  }, [fOutcome, fSide, fWeekday, from, to, q, page, pathname]);
+  }, [fOutcome, fSide, fWeekday, fContext, from, to, q, page, pathname]);
 
-  useEffect(() => { updateUrl(); }, [fOutcome, fSide, fWeekday, from, to, q, page]);
+  useEffect(() => { updateUrl(); }, [fOutcome, fSide, fWeekday, fContext, from, to, q, page]);
 
   const [editTrade, setEditTrade] = useState<TradeEntry | null>(null);
   const [editDate, setEditDate] = useState("");
@@ -965,7 +968,7 @@ function HistoryPageInner(): React.ReactElement {
     return () => { alive = false; };
   }, [supabase]);
 
-  useEffect(() => { setPage(1); }, [fOutcome, fSide, fWeekday, from, to, q]);
+  useEffect(() => { setPage(1); }, [fOutcome, fSide, fWeekday, fContext, from, to, q]);
 
   const filtered = useMemo(() => {
     const ql = q.trim().toLowerCase();
@@ -977,13 +980,14 @@ function HistoryPageInner(): React.ReactElement {
       if (fWeekday !== "ALL" && weekdayEs(t.createdAt) !== fWeekday) return false;
       if (fOutcome !== "all" && outcomeKey(t) !== fOutcome) return false;
       if (fSide !== "all" && t.tradeSide !== fSide) return false;
+      if (fContext !== "all" && (t as any).contextTag !== fContext) return false;
       if (ql) {
         const blob = [t.note || "", t.instrument || "", t.setupTag || "", t.tradeSide || ""].join(" ").toLowerCase();
         if (!blob.includes(ql)) return false;
       }
       return true;
     }).sort((a, b) => b.createdAt - a.createdAt);
-  }, [allTrades, fOutcome, fSide, fWeekday, from, to, q]);
+  }, [allTrades, fOutcome, fSide, fWeekday, fContext, from, to, q]);
 
   const kpis = useMemo(() => computeKPIs(filtered), [filtered]);
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -995,6 +999,7 @@ function HistoryPageInner(): React.ReactElement {
     if (fOutcome !== "all") params.set("outcome", fOutcome);
     if (fSide !== "all") params.set("side", fSide);
     if (fWeekday !== "ALL") params.set("day", fWeekday);
+    if (fContext !== "all") params.set("ctx", fContext);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
     if (q) params.set("q", q);
@@ -1002,7 +1007,7 @@ function HistoryPageInner(): React.ReactElement {
     const qs = params.toString();
     const returnUrl = qs ? `/journal/history?${qs}` : "/journal/history";
     return `/journal/history/${tradeId}?back=${encodeURIComponent(returnUrl)}`;
-  }, [fOutcome, fSide, fWeekday, from, to, q, page]);
+  }, [fOutcome, fSide, fWeekday, fContext, from, to, q, page]);
 
   function openEdit(t: TradeEntry) {
     setEditTrade(t); setEditDate(formatYMD(t.createdAt)); setEditTime(t.tradeTime || "");
@@ -1160,7 +1165,29 @@ function HistoryPageInner(): React.ReactElement {
               <input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ height: 32, padding: "0 10px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.12)", background: "rgba(0,0,0,0.3)", color: "rgba(232,224,208,0.5)", fontSize: 11, outline: "none" }} />
             </div>
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar…" style={{ height: 32, padding: "0 12px", borderRadius: 999, border: "1px solid rgba(180,140,80,0.12)", background: "rgba(0,0,0,0.3)", color: "rgba(232,224,208,0.5)", fontSize: 11, fontWeight: 600, outline: "none", width: 120 }} />
-            <button onClick={() => { setFOutcome("all"); setFSide("all"); setFWeekday("ALL"); setFrom(""); setTo(""); setQ(""); }} style={{ ...pill(), marginLeft: "auto" }}>Clear</button>
+            <button onClick={() => { setFOutcome("all"); setFSide("all"); setFWeekday("ALL"); setFContext("all"); setFrom(""); setTo(""); setQ(""); }} style={{ ...pill(), marginLeft: "auto" }}>Clear</button>
+          </div>
+          {/* Filtro de categoría */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(180,140,80,0.08)" }}>
+            <span style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.25)", letterSpacing: "0.12em", alignSelf: "center" }}>CATEGORÍA</span>
+            {([
+              { v: "all",              l: "Todas" },
+              { v: "CONT-AM",          l: "CONT-AM" },
+              { v: "CONT-AM-SWEEP",    l: "CONT-AM-SWEEP" },
+              { v: "REVERSAL-SWEEP",   l: "REVERSAL-SWEEP" },
+              { v: "REVERSAL-NO-SWEEP",l: "REVERSAL-NO-SWEEP" },
+            ] as { v: ContextFilter; l: string }[]).map(({ v, l }) => {
+              const colors: Record<string, "default"|"green"|"amber"|"red"> = {
+                "all": "default",
+                "CONT-AM": "default",
+                "CONT-AM-SWEEP": "green",
+                "REVERSAL-SWEEP": "amber",
+                "REVERSAL-NO-SWEEP": "red",
+              };
+              return (
+                <button key={v} onClick={() => setFContext(v)} style={pill(fContext === v, colors[v])}>{l}</button>
+              );
+            })}
           </div>
         </div>
 
