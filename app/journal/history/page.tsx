@@ -398,6 +398,10 @@ REGLAS QUE MATI MISMO SE PUSO:
 Si hay un SL antes de las 14:10 → preguntarle si esperó suficiente contexto de la PM o saltó al primer movimiento
 → "¿Esperaste que la PM te diera contexto, o entraste con lo primero que se movió?"
 
+🚩 Deriva de estrategia
+Si en las notas aparecen menciones a indicadores, temporalidades nuevas (M1, M2 para análisis), herramientas fuera de su sistema, o experimentos que no son parte de su proceso ICT consolidado → recordarle brevemente que su estrategia ya funciona y que los experimentos distorsionan sus estadísticas reales.
+→ "Mati, cuando te alejás de lo tuyo los números mienten. Tu edge ya está probado."
+
 ═══ EL ANÁLISIS ═══
 
 Leé los trades y escribí en estas secciones. Sin estadísticas, sin números — eso ya lo tiene en la app. Solo patrones, observaciones y energía.
