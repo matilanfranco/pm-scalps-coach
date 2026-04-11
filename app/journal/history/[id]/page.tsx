@@ -349,19 +349,6 @@ export default function TradeDetailPage() {
               </div>
             )}
 
-            {/* Contexto ICT legacy */}
-            <div style={card}>
-              <div style={{ fontSize:10, fontWeight:800, letterSpacing:"0.18em", color:"rgba(232,224,208,0.28)", marginBottom:4 }}>CONTEXTO ICT</div>
-              <div>
-                <Row label="BIAS">
-                  <Tag color={trade.biasShown==="LONG"?"#7dcb9a":trade.biasShown==="SHORT"?"#e08888":"#c8923a"}>{trade.biasShown}</Tag>
-                </Row>
-                <Row label="MARKET STATE">
-                  <Tag color={trade.marketState==="EXPANSION"?"#85b0e0":trade.marketState==="TRANSITION"?"#e08888":"#c8923a"}>{trade.marketState}</Tag>
-                </Row>
-              </div>
-            </div>
-
             {/* Contexto nuevo — solo si tiene datos */}
             {(trade.amDir || trade.contextTag || trade.htfStruct) && (
               <div style={card}>

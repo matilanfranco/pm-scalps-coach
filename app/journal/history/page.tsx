@@ -64,10 +64,10 @@ function useIsMobile(bp = 768) {
 }
 
 function toCSV(trades: TradeEntry[], name: string) {
-  const hdr = ["id","date","time","instrument","side","outcome","rr","plan","setup","bias","marketState","note"];
+  const hdr = ["id","date","time","instrument","side","outcome","rr","plan","setup","note"];
   const rows = trades.map(t => [
     t.id, formatYMD(t.createdAt), t.tradeTime, t.instrument, t.tradeSide,
-    outcomeKey(t), t.rr, t.followedPlan, t.setupTag, t.biasShown, t.marketState,
+    outcomeKey(t), t.rr, t.followedPlan, t.setupTag,
     (t.note || "").replace(/"/g, '""'),
   ].map(v => `"${v ?? ""}"`).join(","));
   const blob = new Blob([[hdr.join(","), ...rows].join("\n")], { type: "text/csv" });
@@ -303,7 +303,7 @@ function AIAnalysis({ trades }: { trades: TradeEntry[] }): React.ReactElement {
       const date = new Date(t.createdAt).toLocaleDateString("es-AR", { day: "numeric", month: "short" });
       const rr = t.rr != null ? `${t.rr}R` : "—";
       const note = (t.note || "").slice(0, 300).replace(/\n/g, " ");
-      return `${i + 1}. [${date} ${t.tradeTime || "??:??"}] ${t.instrument} ${t.tradeSide} | ${ok.toUpperCase()} ${rr} | Plan:${t.followedPlan} | Estado:${t.marketState} | "${note}"`;
+      return `${i + 1}. [${date} ${t.tradeTime || "??:??"}] ${t.instrument} ${t.tradeSide} | ${ok.toUpperCase()} ${rr} | Plan:${t.followedPlan} | "${note}"`;
     }).join("\n");
 
     return `Sos el coach de trading de Mati. Lo conocés hace tiempo, sabés cómo piensa y sobre todo — sabés lo que es capaz de hacer cuando está afilado.
@@ -950,7 +950,7 @@ function HistoryPageInner(): React.ReactElement {
       if (fOutcome !== "all" && outcomeKey(t) !== fOutcome) return false;
       if (fSide !== "all" && t.tradeSide !== fSide) return false;
       if (ql) {
-        const blob = [t.note || "", t.marketState || "", t.biasShown || "", t.instrument || "", t.setupTag || "", t.tradeSide || ""].join(" ").toLowerCase();
+        const blob = [t.note || "", t.instrument || "", t.setupTag || "", t.tradeSide || ""].join(" ").toLowerCase();
         if (!blob.includes(ql)) return false;
       }
       return true;
@@ -1172,7 +1172,7 @@ function HistoryPageInner(): React.ReactElement {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid rgba(180,140,80,0.1)" }}>
-                    {["#", "FECHA", "DÍA", "HORA", "INSTR", "DIR", "RESULTADO", "RR", "PLAN", "SETUP", "BIAS", ""].map(h => (
+                    {["#", "FECHA", "DÍA", "HORA", "INSTR", "DIR", "RESULTADO", "RR", "PLAN", "SETUP", ""].map(h => (
                       <th key={h} style={{ padding: "10px 12px 10px 0", textAlign: "left", fontSize: 9, fontWeight: 800, letterSpacing: "0.15em", color: "rgba(232,224,208,0.28)", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -1210,9 +1210,7 @@ function HistoryPageInner(): React.ReactElement {
                         <td style={{ padding: "12px 12px 12px 0" }}>
                           {t.setupTag && t.setupTag !== "unknown" ? <Tag>{t.setupTag === "A" ? "Setup A" : t.setupTag === "B" ? "Setup B" : t.setupTag}</Tag> : <span style={{ color: "rgba(232,224,208,0.2)", fontSize: 12 }}>—</span>}
                         </td>
-                        <td style={{ padding: "12px 12px 12px 0" }}>
-                          <Tag color={t.biasShown === "LONG" ? "#7dcb9a" : t.biasShown === "SHORT" ? "#e08888" : "rgba(232,224,208,0.4)"}>{t.biasShown}</Tag>
-                        </td>
+
                         <td style={{ padding: "12px 0", textAlign: "right" }}>
                           <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                             <button onClick={e => { e.stopPropagation(); openEdit(t); }} style={{ width: 28, height: 28, borderRadius: 999, border: "1px solid rgba(180,140,80,0.15)", background: "rgba(0,0,0,0.3)", color: "rgba(232,224,208,0.4)", fontSize: 11, cursor: "pointer" }}>✎</button>

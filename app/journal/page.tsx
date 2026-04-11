@@ -428,8 +428,8 @@ export default function Page() {
               </div>
               <div style={{ display:"grid", gap:7 }}>
                 {[
-                  { tag:"A" as SetupTag, label:"Setup A", desc:"OB + FVG + OTE + Confirmación · 2–3R" },
-                  { tag:"B" as SetupTag, label:"Setup B", desc:"FVG + Confirmación · 1.5R" },
+                  { tag:"A" as SetupTag, label:"Setup A", desc:"FVG + OB + OTE + Confirmación" },
+                  { tag:"B" as SetupTag, label:"Setup B", desc:"FVG + Breaker (opcional) + Confirmación" },
                   { tag:"none" as SetupTag, label:"Sin setup / Solo estudio", desc:"Registrás el escenario sin entrada" },
                 ].map(({ tag, label, desc }) => {
                   const isActive = setupTag === tag;
