@@ -261,10 +261,12 @@ export default function TradeDetailPage() {
                   </div>
                 </div>
                 <div style={{ marginLeft:"auto",display:"flex",flexWrap:"wrap",gap:8,alignItems:"center" }}>
-                  {trade.rr!=null&&(
+                  {(trade.rr!=null || outcome==="loss") && (
                     <div style={{ textAlign:"center" }}>
                       <div style={{ fontSize:9,fontWeight:800,letterSpacing:"0.14em",color:"rgba(232,224,208,0.25)",marginBottom:2 }}>RR</div>
-                      <div style={{ fontSize:22,fontWeight:900,color:"#7dcb9a" }}>{trade.rr.toFixed(2)}R</div>
+                      <div style={{ fontSize:22,fontWeight:900,color: outcome==="loss" ? "#e08888" : "#7dcb9a" }}>
+                        {outcome==="loss" ? (trade.rr!=null && trade.rr < 0 ? `${trade.rr.toFixed(2)}R` : "-1R") : `${trade.rr!.toFixed(2)}R`}
+                      </div>
                     </div>
                   )}
                   <Tag color={trade.tradeSide==="BUY"?"#85b0e0":"#e08888"} border={trade.tradeSide==="BUY"?"rgba(74,126,184,0.35)":"rgba(184,85,85,0.35)"} bg={trade.tradeSide==="BUY"?"rgba(74,126,184,0.12)":"rgba(184,85,85,0.12)"}>{trade.tradeSide}</Tag>
@@ -310,9 +312,12 @@ export default function TradeDetailPage() {
                   <Row label="RESULTADO">
                     <Tag color={ocColor}>{outcome==="win"?"Win":outcome==="loss"?"Loss":outcome==="be"?"BE":"—"}</Tag>
                   </Row>
-                  {trade.rr!=null&&(
+                  {(trade.rr!=null || outcome==="loss") && (
                     <Row label="RR">
-                      <Tag color="#7dcb9a" border="rgba(74,158,106,0.3)" bg="rgba(74,158,106,0.08)">{trade.rr.toFixed(2)}R</Tag>
+                      {outcome==="loss"
+                        ? <Tag color="#e08888" border="rgba(184,85,85,0.3)" bg="rgba(184,85,85,0.08)">{trade.rr!=null && trade.rr < 0 ? `${trade.rr.toFixed(2)}R` : "-1R"}</Tag>
+                        : <Tag color="#7dcb9a" border="rgba(74,158,106,0.3)" bg="rgba(74,158,106,0.08)">{trade.rr!.toFixed(2)}R</Tag>
+                      }
                     </Row>
                   )}
                   {(trade as any).partialRRs?.length>0&&(
