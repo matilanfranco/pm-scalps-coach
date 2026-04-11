@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabaseClient";
 import { getTradeById } from "@/lib/tradesDb";
@@ -169,7 +169,7 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
 }
 
 // ─── Main ──────────────────────────────────────────
-function TradeDetailInner() {
+export default function TradeDetailPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -194,7 +194,7 @@ function TradeDetailInner() {
         if (!uid) { router.replace("/login"); return; }
         const t = await getTradeById(uid, id);
         if (!t) { setError("Trade no encontrado."); return; }
-        setTrade(t as unknown as TradeEntry);
+        setTrade(t as TradeEntry);
       } catch { setError("Error al cargar el trade."); }
       finally { setLoading(false); }
     })();
@@ -344,9 +344,9 @@ function TradeDetailInner() {
               </div>
             )}
 
-            {/* Contexto ICT */}
+            {/* Contexto ICT legacy */}
             <div style={card}>
-              <div style={{ fontSize:10,fontWeight:800,letterSpacing:"0.18em",color:"rgba(232,224,208,0.28)",marginBottom:4 }}>CONTEXTO ICT</div>
+              <div style={{ fontSize:10, fontWeight:800, letterSpacing:"0.18em", color:"rgba(232,224,208,0.28)", marginBottom:4 }}>CONTEXTO ICT</div>
               <div>
                 <Row label="BIAS">
                   <Tag color={trade.biasShown==="LONG"?"#7dcb9a":trade.biasShown==="SHORT"?"#e08888":"#c8923a"}>{trade.biasShown}</Tag>
@@ -354,34 +354,62 @@ function TradeDetailInner() {
                 <Row label="MARKET STATE">
                   <Tag color={trade.marketState==="EXPANSION"?"#85b0e0":trade.marketState==="TRANSITION"?"#e08888":"#c8923a"}>{trade.marketState}</Tag>
                 </Row>
-                <Row label="LIQUIDEZ">
-                  <Tag color={trade.liqTaken==="yes"?"#7dcb9a":"rgba(232,224,208,0.4)"}>{trade.liqTaken==="yes"?"Tomada":trade.liqTaken==="no"?"No tomada":"—"}</Tag>
-                </Row>
-                {trade.lastTaken&&<Row label="ÚLTIMA LIQ"><Tag>{trade.lastTaken}</Tag></Row>}
-                <Row label="REACCIÓN">
-                  <Tag color={trade.reaction==="accept"?"#7dcb9a":trade.reaction==="absorb"?"#e08888":"rgba(232,224,208,0.4)"}>
-                    {trade.reaction==="accept"?"Aceptación":trade.reaction==="absorb"?"Absorción":"No claro"}
-                  </Tag>
-                </Row>
-                <Row label="FVG">
-                  <Tag color={trade.hasFvg==="yes"?"#7dcb9a":trade.hasFvg==="no"?"#e08888":"rgba(232,224,208,0.35)"}>
-                    {trade.hasFvg==="yes"?"Sí":trade.hasFvg==="no"?"No":"—"}
-                  </Tag>
-                </Row>
-                {(trade as any).invalidationKind&&(
-                  <Row label="INVALIDACIÓN">
-                    <Tag color="#c8923a" border="rgba(200,146,58,0.3)" bg="rgba(200,146,58,0.08)">{(trade as any).invalidationKind}</Tag>
-                  </Row>
-                )}
-                {trade.takenLevels?.length>0&&(
-                  <Row label="NIVELES">
-                    <div style={{ display:"flex",flexWrap:"wrap",gap:5 }}>
-                      {trade.takenLevels.map(l=><Tag key={l}>{l}</Tag>)}
-                    </div>
-                  </Row>
-                )}
               </div>
             </div>
+
+            {/* Contexto nuevo — solo si tiene datos */}
+            {(trade.amDir || trade.contextTag || trade.htfStruct) && (
+              <div style={card}>
+                <div style={{ fontSize:10, fontWeight:800, letterSpacing:"0.18em", color:"rgba(232,224,208,0.28)", marginBottom:4 }}>CONTEXTO DE SESIÓN</div>
+                <div>
+                  {trade.contextTag && (
+                    <Row label="CATEGORÍA">
+                      <Tag color="#c8923a" border="rgba(200,146,58,0.3)" bg="rgba(200,146,58,0.08)">{trade.contextTag}</Tag>
+                    </Row>
+                  )}
+                  {trade.htfAligned !== null && (
+                    <Row label="HTF H1/H4">
+                      <Tag color={trade.htfAligned ? "#7dcb9a" : "#e08888"} border={trade.htfAligned ? "rgba(74,158,106,0.3)" : "rgba(184,85,85,0.3)"} bg={trade.htfAligned ? "rgba(74,158,106,0.08)" : "rgba(184,85,85,0.08)"}>
+                        {trade.htfStruct} · {trade.htfAligned ? "A favor" : "En contra"}
+                      </Tag>
+                    </Row>
+                  )}
+                  {trade.amDir && (
+                    <Row label="DIRECCIÓN AM">
+                      <Tag color={trade.amDir === "alcista" ? "#7dcb9a" : trade.amDir === "bajista" ? "#e08888" : "#c8923a"}>
+                        {trade.amDir}
+                      </Tag>
+                    </Row>
+                  )}
+                  {trade.amSweepNivel && (
+                    <Row label="SWEEP APERTURA">
+                      <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                        <Tag>{trade.amSweepNivel}</Tag>
+                        {trade.amReac && <Tag color={trade.amReac === "acepto" ? "#7dcb9a" : "#c8923a"}>{trade.amReac}</Tag>}
+                      </div>
+                    </Row>
+                  )}
+                  {trade.pmSweepNivel && (
+                    <Row label="SWEEP SESIÓN">
+                      <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                        <Tag>{trade.pmSweepNivel}</Tag>
+                        {trade.pmReac && <Tag color={trade.pmReac === "acepto" ? "#7dcb9a" : "#c8923a"}>{trade.pmReac}</Tag>}
+                      </div>
+                    </Row>
+                  )}
+                  {trade.m15Struct && (
+                    <Row label="M15 ESTRUCTURA">
+                      <Tag color={trade.m15Struct === "alcista" ? "#7dcb9a" : "#e08888"}>{trade.m15Struct}</Tag>
+                    </Row>
+                  )}
+                  {trade.cisdDir && (
+                    <Row label="CISD M15">
+                      <Tag color={trade.cisdDir === "alcista" ? "#7dcb9a" : "#e08888"}>{trade.cisdDir}</Tag>
+                    </Row>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Nota */}
             {trade.note?.trim()&&(
@@ -400,13 +428,5 @@ function TradeDetailInner() {
         )}
       </div>
     </>
-  );
-}
-
-export default function TradeDetailPage() {
-  return (
-    <Suspense fallback={<div style={{ minHeight:"100vh", background:"#0c0a07" }} />}>
-      <TradeDetailInner />
-    </Suspense>
   );
 }

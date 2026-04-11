@@ -22,6 +22,29 @@ export type InvalidationKind = "M5" | "M15";
 export type YesNo = "yes" | "no";
 export type M15Confirmed = "yes" | "no" | null;
 
+// ─── Nuevos tipos de contexto ─────────────────────
+
+export type AmDir = "alcista" | "bajista" | "sin-dir" | null;
+export type AmReac = "absorbio" | "acepto" | null;
+export type HtfStruct = "alcista" | "bajista" | null;
+export type M15Struct = "alcista" | "bajista" | null;
+export type CisdDir = "alcista" | "bajista" | null;
+export type LevelLabel =
+  | "PDH" | "PDL"
+  | "London H" | "London L"
+  | "Asia H" | "Asia L"
+  | "Weekly H" | "Weekly L"
+  | null;
+
+export type ContextTag =
+  | "CONT-AM"
+  | "CONT-AM-SWEEP"
+  | "REVERSAL-SWEEP"
+  | "REVERSAL-NO-SWEEP"
+  | null;
+
+// ─────────────────────────────────────────────────
+
 export type MarketState =
   | "EXPANSION"
   | "DELIVERY_CONDITIONAL"
@@ -36,7 +59,7 @@ export type TradeEntry = {
   id: string;
   createdAt: number;
 
-  // contexto
+  // contexto legacy (se mantiene por compatibilidad)
   instrument: Instrument;
   liqTaken: "yes" | "no" | "unknown";
   takenLevels: Level[];
@@ -52,6 +75,19 @@ export type TradeEntry = {
   m15Confirmed: M15Confirmed;
   suggestedTargets: Level[];
 
+  // ─── Nuevo contexto de sesión ───────────────────
+  amDir: AmDir;
+  amSweepNivel: LevelLabel;
+  amReac: AmReac;
+  htfStruct: HtfStruct;
+  pmSweepNivel: LevelLabel;
+  pmReac: AmReac;
+  m15Struct: M15Struct;
+  cisdDir: CisdDir;
+  contextTag: ContextTag;
+  htfAligned: boolean | null;
+  // ────────────────────────────────────────────────
+
   // trade
   helped: boolean;
   tradeTaken: "yes" | "no";
@@ -62,6 +98,10 @@ export type TradeEntry = {
   setupTag: SetupTag;
   outcome: OutcomeDb;
   note: string;
+
+  // parciales
+  numPartials?: number | null;
+  partialRRs?: number[] | null;
 
   // imagen
   imgUrl?: string | null;

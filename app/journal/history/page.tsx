@@ -14,7 +14,7 @@ const LS_ANALYSES = "pm_scalps_analyses_v1";
 
 type OutcomeKey = "all" | OutcomeDb;
 type Weekday = "ALL" | "Lunes" | "Martes" | "Miércoles" | "Jueves" | "Viernes";
-type ChartMode = "none" | "equity" | "marketstate" | "ai";
+type ChartMode = "none" | "weekly" | "equity" | "marketstate" | "ai";
 
 type SavedAnalysis = {
   id: string;
@@ -31,6 +31,22 @@ function weekdayEs(ms: number): Weekday {
   if (d === 1) return "Lunes"; if (d === 2) return "Martes";
   if (d === 3) return "Miércoles"; if (d === 4) return "Jueves";
   if (d === 5) return "Viernes"; return "ALL";
+}
+
+// Muestra RR con color — negativo en rojo, BE en amber, positivo en verde
+function RRTag({ t }: { t: TradeEntry }) {
+  const ok = outcomeKey(t);
+  if (ok === "loss") {
+    const rr = t.rr != null && t.rr < 0 ? `${t.rr.toFixed(2)}R` : "-1R";
+    return <Tag color="#e08888" border="rgba(184,85,85,0.3)" bg="rgba(184,85,85,0.08)">{rr}</Tag>;
+  }
+  if (ok === "be") {
+    return <Tag color="#c8923a" border="rgba(200,146,58,0.3)" bg="rgba(200,146,58,0.08)">0R</Tag>;
+  }
+  if (t.rr != null) {
+    return <Tag color="#7dcb9a" border="rgba(74,158,106,0.3)" bg="rgba(74,158,106,0.08)">{t.rr > 0 ? "+" : ""}{t.rr.toFixed(2)}R</Tag>;
+  }
+  return null;
 }
 
 function safeRR(t: TradeEntry): number | null {
@@ -92,6 +108,145 @@ function Tag({ children, color = "rgba(232,224,208,0.35)", bg = "rgba(255,255,25
     <span style={{ height: 24, padding: "0 10px", display: "inline-flex", alignItems: "center", borderRadius: 999, border: `1px solid ${border}`, background: bg, fontSize: 11, fontWeight: 700, color, whiteSpace: "nowrap" }}>
       {children}
     </span>
+  );
+}
+
+// ─── Weekly Summary ────────────────────────────────
+function WeeklySummary({ trades }: { trades: TradeEntry[] }): React.ReactElement {
+  // Agrupar trades por semana ISO
+  const weeks = useMemo(() => {
+    function getWeekKey(ms: number): string {
+      const d = new Date(ms);
+      const day = d.getDay() === 0 ? 7 : d.getDay(); // lunes = 1
+      const monday = new Date(d);
+      monday.setDate(d.getDate() - (day - 1));
+      return monday.toISOString().slice(0, 10);
+    }
+
+    function formatWeekLabel(mondayStr: string): string {
+      const monday = new Date(mondayStr + "T12:00:00");
+      const friday = new Date(monday);
+      friday.setDate(monday.getDate() + 4);
+      const fmt = (d: Date) => d.toLocaleDateString("es-AR", { day: "numeric", month: "short" });
+      return `${fmt(monday)} — ${fmt(friday)}`;
+    }
+
+    const map = new Map<string, TradeEntry[]>();
+    trades.forEach(t => {
+      const k = getWeekKey(t.createdAt);
+      if (!map.has(k)) map.set(k, []);
+      map.get(k)!.push(t);
+    });
+
+    return Array.from(map.entries())
+      .sort((a, b) => b[0].localeCompare(a[0])) // más reciente primero
+      .map(([key, ts]) => {
+        const wins = ts.filter(t => outcomeKey(t) === "win");
+        const losses = ts.filter(t => outcomeKey(t) === "loss");
+        const bes = ts.filter(t => outcomeKey(t) === "be");
+        const winRRs = wins.map(t => safeRR(t)).filter((v): v is number => v !== null);
+        const netRR = winRRs.reduce((a, b) => a + b, 0) - losses.length;
+        const wr = wins.length + losses.length > 0 ? wins.length / (wins.length + losses.length) * 100 : 0;
+        const avgWinRR = winRRs.length ? winRRs.reduce((a, b) => a + b, 0) / winRRs.length : 0;
+        const notFollowed = ts.filter(t => t.followedPlan === "no").length;
+        return { key, label: formatWeekLabel(key), ts, wins, losses, bes, netRR, wr, avgWinRR, notFollowed };
+      });
+  }, [trades]);
+
+  if (weeks.length === 0) return <div style={{ color: "rgba(232,224,208,0.3)", fontSize: 12, padding: "20px 0" }}>No hay trades aún.</div>;
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.18em", color: "rgba(232,224,208,0.28)", marginBottom: 16 }}>RESUMEN SEMANAL</div>
+      <div style={{ display: "grid", gap: 10 }}>
+        {weeks.map(w => {
+          const isGreen = w.netRR > 0;
+          const isRed = w.netRR < 0;
+          const borderColor = isGreen ? "rgba(74,158,106,0.3)" : isRed ? "rgba(184,85,85,0.3)" : "rgba(180,140,80,0.15)";
+          const bgColor = isGreen ? "rgba(74,158,106,0.05)" : isRed ? "rgba(184,85,85,0.05)" : "rgba(0,0,0,0.1)";
+          const rrColor = isGreen ? "#7dcb9a" : isRed ? "#e08888" : "rgba(232,224,208,0.5)";
+
+          return (
+            <div key={w.key} style={{ borderRadius: 12, border: `1px solid ${borderColor}`, background: bgColor, padding: "14px 16px" }}>
+              {/* Header semana */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "rgba(232,224,208,0.7)" }}>{w.label}</div>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: rrColor }}>
+                    {w.netRR >= 0 ? "+" : ""}{w.netRR.toFixed(2)}R
+                  </div>
+                  <div style={{ fontSize: 11, color: "rgba(232,224,208,0.4)", fontWeight: 700 }}>
+                    {w.wr.toFixed(0)}% WR
+                  </div>
+                </div>
+              </div>
+
+              {/* Stats row */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {/* Trades */}
+                <div style={{ padding: "6px 10px", borderRadius: 8, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(180,140,80,0.1)" }}>
+                  <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 2 }}>TRADES</div>
+                  <div style={{ fontSize: 13, fontWeight: 900, color: "rgba(232,224,208,0.7)" }}>{w.ts.length}</div>
+                </div>
+
+                {/* W/L/BE */}
+                <div style={{ padding: "6px 10px", borderRadius: 8, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(180,140,80,0.1)" }}>
+                  <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 2 }}>W / L / BE</div>
+                  <div style={{ fontSize: 13, fontWeight: 900 }}>
+                    <span style={{ color: "#7dcb9a" }}>{w.wins.length}</span>
+                    <span style={{ color: "rgba(232,224,208,0.3)" }}> / </span>
+                    <span style={{ color: "#e08888" }}>{w.losses.length}</span>
+                    <span style={{ color: "rgba(232,224,208,0.3)" }}> / </span>
+                    <span style={{ color: "#c8923a" }}>{w.bes.length}</span>
+                  </div>
+                </div>
+
+                {/* AVG RR wins */}
+                {w.avgWinRR > 0 && (
+                  <div style={{ padding: "6px 10px", borderRadius: 8, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(180,140,80,0.1)" }}>
+                    <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 2 }}>AVG WIN</div>
+                    <div style={{ fontSize: 13, fontWeight: 900, color: "#7dcb9a" }}>{w.avgWinRR.toFixed(2)}R</div>
+                  </div>
+                )}
+
+                {/* Fuera de plan */}
+                {w.notFollowed > 0 && (
+                  <div style={{ padding: "6px 10px", borderRadius: 8, background: "rgba(184,85,85,0.08)", border: "1px solid rgba(184,85,85,0.2)" }}>
+                    <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(184,85,85,0.6)", marginBottom: 2 }}>FUERA PLAN</div>
+                    <div style={{ fontSize: 13, fontWeight: 900, color: "#e08888" }}>{w.notFollowed}</div>
+                  </div>
+                )}
+
+                {/* Mejor trade */}
+                {w.wins.length > 0 && (() => {
+                  const best = w.wins.reduce((a, b) => (safeRR(a) ?? 0) > (safeRR(b) ?? 0) ? a : b);
+                  const bestRR = safeRR(best);
+                  if (!bestRR) return null;
+                  return (
+                    <div style={{ padding: "6px 10px", borderRadius: 8, background: "rgba(74,158,106,0.08)", border: "1px solid rgba(74,158,106,0.2)" }}>
+                      <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(74,158,106,0.6)", marginBottom: 2 }}>MEJOR TRADE</div>
+                      <div style={{ fontSize: 13, fontWeight: 900, color: "#7dcb9a" }}>+{bestRR.toFixed(2)}R · {best.instrument} {best.tradeSide}</div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Barra visual de progreso semanal */}
+              {w.wins.length + w.losses.length > 0 && (
+                <div style={{ marginTop: 10, height: 4, borderRadius: 999, background: "rgba(180,140,80,0.1)", overflow: "hidden" }}>
+                  <div style={{
+                    height: "100%", borderRadius: 999,
+                    width: `${w.wr}%`,
+                    background: w.wr >= 60 ? "#4a9e6a" : w.wr >= 40 ? "#c8923a" : "#b85555",
+                    transition: "width 0.4s ease",
+                  }} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -520,26 +675,51 @@ function EquityCurve({ trades }: { trades: TradeEntry[] }): React.ReactElement {
   );
 }
 
-// ─── Market State Stats ────────────────────────────
+// ─── Context Tag Stats ────────────────────────────
 function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElement {
-  const states = ["EXPANSION", "TRANSITION", "DELIVERY_CONDITIONAL", "WAIT"] as const;
+  const tags = ["CONT-AM", "CONT-AM-SWEEP", "REVERSAL-SWEEP", "REVERSAL-NO-SWEEP"] as const;
+  const tagColors: Record<string, { col: string; bg: string; border: string }> = {
+    "CONT-AM":           { col: "#85b0e0", bg: "rgba(74,126,184,0.06)",  border: "rgba(74,126,184,0.2)" },
+    "CONT-AM-SWEEP":     { col: "#7dcb9a", bg: "rgba(74,158,106,0.06)",  border: "rgba(74,158,106,0.2)" },
+    "REVERSAL-SWEEP":    { col: "#c8923a", bg: "rgba(200,146,58,0.06)",  border: "rgba(200,146,58,0.2)" },
+    "REVERSAL-NO-SWEEP": { col: "#e08888", bg: "rgba(184,85,85,0.06)",   border: "rgba(184,85,85,0.2)" },
+  };
+
+  const withTag = trades.filter(t => (t as any).contextTag);
+  const noTag = trades.length - withTag.length;
 
   return (
     <div style={{ marginTop: 16 }}>
-      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.18em", color: "rgba(232,224,208,0.28)", marginBottom: 12 }}>RENDIMIENTO POR MARKET STATE</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(155px,1fr))", gap: 8 }}>
-        {states.map(ms => {
-          const g = trades.filter(t => t.marketState === ms);
+      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.18em", color: "rgba(232,224,208,0.28)", marginBottom: 12 }}>
+        RENDIMIENTO POR CATEGORÍA DE TRADE
+      </div>
+
+      {noTag > 0 && (
+        <div style={{ fontSize: 11, color: "rgba(232,224,208,0.28)", marginBottom: 12 }}>
+          {noTag} trade{noTag !== 1 ? "s" : ""} sin categoría aún — editálos desde el ✎ para completar el contexto.
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(155px,1fr))", gap: 8, marginBottom: 12 }}>
+        {tags.map(tag => {
+          const g = trades.filter(t => (t as any).contextTag === tag);
           const w = g.filter(t => outcomeKey(t) === "win");
           const l = g.filter(t => outcomeKey(t) === "loss");
           const winRRs = w.map(t => safeRR(t)).filter((v): v is number => v !== null);
           const netRR = winRRs.reduce((a, b) => a + b, 0) - l.length;
           const wr = w.length + l.length > 0 ? w.length / (w.length + l.length) * 100 : 0;
-          const msCol = ms === "EXPANSION" ? "#85b0e0" : ms === "TRANSITION" ? "#e08888" : ms === "DELIVERY_CONDITIONAL" ? "#7dcb9a" : "#c8923a";
-          const msBg = ms === "EXPANSION" ? "rgba(74,126,184,0.06)" : ms === "TRANSITION" ? "rgba(184,85,85,0.06)" : ms === "DELIVERY_CONDITIONAL" ? "rgba(74,158,106,0.06)" : "rgba(200,146,58,0.05)";
+          const { col, bg, border } = tagColors[tag];
+
+          if (g.length === 0) return (
+            <div key={tag} style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${border}`, background: bg, opacity: 0.4 }}>
+              <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: col, marginBottom: 8 }}>{tag}</div>
+              <div style={{ fontSize: 13, color: "rgba(232,224,208,0.3)" }}>Sin datos</div>
+            </div>
+          );
+
           return (
-            <div key={ms} style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${msCol}22`, background: msBg }}>
-              <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: msCol, marginBottom: 8 }}>{ms}</div>
+            <div key={tag} style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${border}`, background: bg }}>
+              <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: col, marginBottom: 8 }}>{tag}</div>
               <div style={{ fontSize: 20, fontWeight: 900, color: "rgba(232,224,208,0.9)", marginBottom: 4 }}>{wr.toFixed(0)}%</div>
               <div style={{ fontSize: 10, color: "rgba(232,224,208,0.35)", marginBottom: 2 }}>{w.length}W · {l.length}L · {g.length - w.length - l.length}BE</div>
               <div style={{ fontSize: 11, fontWeight: 800, color: netRR >= 0 ? "#7dcb9a" : "#e08888" }}>{netRR >= 0 ? "+" : ""}{netRR.toFixed(1)}R net</div>
@@ -548,7 +728,8 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
         })}
       </div>
 
-      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+      {/* BUY vs SELL */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
         {(["BUY", "SELL"] as const).map(side => {
           const g = trades.filter(t => t.tradeSide === side);
           const w = g.filter(t => outcomeKey(t) === "win");
@@ -558,8 +739,9 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
           const netRR = winRRs.reduce((a, b) => a + b, 0) - l.length;
           const sc = side === "BUY" ? "#85b0e0" : "#e08888";
           const sb = side === "BUY" ? "rgba(74,126,184,0.06)" : "rgba(184,85,85,0.06)";
+          const sborder = side === "BUY" ? "rgba(74,126,184,0.2)" : "rgba(184,85,85,0.2)";
           return (
-            <div key={side} style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${sc}33`, background: sb }}>
+            <div key={side} style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${sborder}`, background: sb }}>
               <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: sc, marginBottom: 6 }}>{side}</div>
               <div style={{ fontSize: 18, fontWeight: 900, color: "rgba(232,224,208,0.9)" }}>{wr.toFixed(0)}%</div>
               <div style={{ fontSize: 10, color: "rgba(232,224,208,0.35)", marginTop: 2 }}>{w.length}W · {l.length}L</div>
@@ -569,7 +751,8 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
         })}
       </div>
 
-      <div style={{ marginTop: 12 }}>
+      {/* Horario */}
+      <div style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.15em", color: "rgba(232,224,208,0.28)", marginBottom: 8 }}>POR HORARIO</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
           {([
@@ -593,7 +776,8 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
         </div>
       </div>
 
-      <div style={{ marginTop: 12 }}>
+      {/* Día de semana */}
+      <div>
         <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.15em", color: "rgba(232,224,208,0.28)", marginBottom: 8 }}>POR DÍA DE SEMANA</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"].map(day => {
@@ -719,6 +903,19 @@ function HistoryPageInner(): React.ReactElement {
   const [editNote, setEditNote] = useState("");
   const [editInstrument, setEditInstrument] = useState<Instrument>("NQ");
   const [editSaving, setEditSaving] = useState(false);
+  // Contexto nuevo
+  const [editAmSweep, setEditAmSweep] = useState<"si"|"no"|null>(null);
+  const [editAmSweepNivel, setEditAmSweepNivel] = useState<import("@/lib/types").LevelLabel>(null);
+  const [editAmReac, setEditAmReac] = useState<import("@/lib/types").AmReac>(null);
+  const [editAmDir, setEditAmDir] = useState<import("@/lib/types").AmDir>(null);
+  const [editHtfStruct, setEditHtfStruct] = useState<import("@/lib/types").HtfStruct>(null);
+  const [editPmSweep, setEditPmSweep] = useState<"si"|"no"|null>(null);
+  const [editPmSweepNivel, setEditPmSweepNivel] = useState<import("@/lib/types").LevelLabel>(null);
+  const [editPmReac, setEditPmReac] = useState<import("@/lib/types").AmReac>(null);
+  const [editM15Struct, setEditM15Struct] = useState<import("@/lib/types").M15Struct>(null);
+  const [editHasCisd, setEditHasCisd] = useState<"si"|"no"|null>(null);
+  const [editCisdDir, setEditCisdDir] = useState<import("@/lib/types").CisdDir>(null);
+  const [editModalTab, setEditModalTab] = useState<"trade"|"contexto">("trade");
 
   useEffect(() => {
     if (!supabase) return;
@@ -785,6 +982,19 @@ function HistoryPageInner(): React.ReactElement {
     setEditRR(t.rr != null ? String(t.rr) : "");
     setEditOutcome(normalizeOutcome(t.outcome)); setEditSetup(t.setupTag ?? "unknown");
     setEditNote(t.note ?? ""); setEditInstrument(t.instrument ?? "NQ");
+    setEditModalTab("trade");
+    // Contexto
+    setEditAmSweep(t.amSweepNivel ? "si" : t.amDir ? "no" : null);
+    setEditAmSweepNivel(t.amSweepNivel ?? null);
+    setEditAmReac(t.amReac ?? null);
+    setEditAmDir(t.amDir ?? null);
+    setEditHtfStruct(t.htfStruct ?? null);
+    setEditPmSweep(t.pmSweepNivel ? "si" : t.m15Struct ? "no" : null);
+    setEditPmSweepNivel(t.pmSweepNivel ?? null);
+    setEditPmReac(t.pmReac ?? null);
+    setEditM15Struct(t.m15Struct ?? null);
+    setEditHasCisd(t.cisdDir ? "si" : null);
+    setEditCisdDir(t.cisdDir ?? null);
   }
 
   async function saveEdit() {
@@ -793,9 +1003,32 @@ function HistoryPageInner(): React.ReactElement {
     try {
       const ts = buildTimestamp(editDate, editTime);
       const rrV = (() => { const n = Number(String(editRR).replace(",", ".")); return Number.isFinite(n) ? n : null; })();
-      await updateTrade(editTrade.id, { createdAt: ts, tradeTime: editTime, tradeSide: editSide, followedPlan: editFollowed, rr: rrV, outcome: editOutcome, setupTag: editSetup, note: editNote, instrument: editInstrument });
+      // Calcular contextTag y htfAligned automáticamente
+      const { computeContextTag } = await import("@/lib/journalLogic");
+      const ctxResult = computeContextTag({
+        amDir: editAmDir, amSweepNivel: editAmSweepNivel, amReac: editAmReac,
+        htfStruct: editHtfStruct, pmSweepNivel: editPmSweepNivel, pmReac: editPmReac,
+        m15Struct: editM15Struct, cisdDir: editCisdDir,
+      }, editSide);
+      await updateTrade(editTrade.id, {
+        createdAt: ts, tradeTime: editTime, tradeSide: editSide,
+        followedPlan: editFollowed, rr: rrV, outcome: editOutcome,
+        setupTag: editSetup, note: editNote, instrument: editInstrument,
+        amDir: editAmDir, amSweepNivel: editAmSweepNivel, amReac: editAmReac,
+        htfStruct: editHtfStruct, pmSweepNivel: editPmSweepNivel, pmReac: editPmReac,
+        m15Struct: editM15Struct, cisdDir: editCisdDir,
+        contextTag: ctxResult.contextTag, htfAligned: ctxResult.htfAligned,
+      });
       setAllTrades(prev => {
-        const next = prev.map(t => t.id !== editTrade.id ? t : { ...t, createdAt: ts, tradeTime: editTime, tradeSide: editSide, followedPlan: editFollowed, rr: rrV, outcome: editOutcome, setupTag: editSetup as SetupTag, note: editNote, instrument: editInstrument });
+        const next = prev.map(t => t.id !== editTrade.id ? t : {
+          ...t, createdAt: ts, tradeTime: editTime, tradeSide: editSide,
+          followedPlan: editFollowed, rr: rrV, outcome: editOutcome,
+          setupTag: editSetup as SetupTag, note: editNote, instrument: editInstrument,
+          amDir: editAmDir, amSweepNivel: editAmSweepNivel, amReac: editAmReac,
+          htfStruct: editHtfStruct, pmSweepNivel: editPmSweepNivel, pmReac: editPmReac,
+          m15Struct: editM15Struct, cisdDir: editCisdDir,
+          contextTag: ctxResult.contextTag, htfAligned: ctxResult.htfAligned,
+        });
         localStorage.setItem(LS_KEY, JSON.stringify(next)); return next;
       });
       setEditTrade(null);
@@ -839,10 +1072,10 @@ function HistoryPageInner(): React.ReactElement {
         {/* KPIs */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px,1fr))", gap: 10, marginBottom: 12 }}>
           {[
-            { label: "TOTAL TRADES", val: kpis.total, sub: `${kpis.totalWithRR} con RR` },
-            { label: "WINRATE", val: `${kpis.winrate.toFixed(1)}%`, sub: `W ${kpis.winCount} · L ${kpis.lossCount} · BE ${kpis.beCount}` },
-            { label: "NET RR", val: kpis.netRR.toFixed(2), sub: `Exp: ${kpis.expectancy.toFixed(2)}`, color: kpis.netRR >= 0 ? "#7dcb9a" : "#e08888" },
-            { label: "AVG RR WIN", val: kpis.avgRR.toFixed(2), sub: `PF: ${kpis.profitFactor === Infinity ? "∞" : kpis.profitFactor.toFixed(2)}` },
+            { label: "TOTAL TRADES", val: kpis.total, sub: `W ${kpis.winCount} · L ${kpis.lossCount} · BE ${kpis.beCount}` },
+            { label: "WINRATE", val: `${kpis.winrate.toFixed(1)}%`, sub: `${kpis.totalWithRR} trades con RR` },
+            { label: "NET RR", val: kpis.netRR.toFixed(2), sub: `Profit Factor: ${kpis.profitFactor === Infinity ? "∞" : kpis.profitFactor.toFixed(2)}`, color: kpis.netRR >= 0 ? "#7dcb9a" : "#e08888" },
+            { label: "AVG RR EN WINS", val: kpis.avgRR.toFixed(2) + "R", sub: `Solo trades ganadores` },
           ].map(({ label, val, sub, color }) => (
             <div key={label} style={card}>
               <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.18em", color: "rgba(232,224,208,0.28)", marginBottom: 8 }}>{label}</div>
@@ -854,6 +1087,9 @@ function HistoryPageInner(): React.ReactElement {
 
         {/* Toggles */}
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+          <button onClick={() => setChartMode(chartMode === "weekly" ? "none" : "weekly")} style={pill(chartMode === "weekly", "amber")}>
+            {chartMode === "weekly" ? "▲" : "▼"} Resumen semanal
+          </button>
           <button onClick={() => setChartMode(chartMode === "equity" ? "none" : "equity")} style={pill(chartMode === "equity", "amber")}>
             {chartMode === "equity" ? "▲" : "▼"} Curva de equity
           </button>
@@ -867,6 +1103,7 @@ function HistoryPageInner(): React.ReactElement {
 
         {chartMode !== "none" && (
           <div style={{ ...card, marginBottom: 12 }}>
+            {chartMode === "weekly" && <WeeklySummary trades={allTrades} />}
             {chartMode === "equity" && <EquityCurve trades={allTrades} />}
             {chartMode === "marketstate" && <MarketStateStats trades={filtered} />}
             {chartMode === "ai" && <AIAnalysis trades={filtered.length > 0 ? filtered : allTrades} />}
@@ -918,7 +1155,7 @@ function HistoryPageInner(): React.ReactElement {
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                       <Tag color={t.tradeSide === "BUY" ? "#85b0e0" : "#e08888"} border={t.tradeSide === "BUY" ? "rgba(74,126,184,0.35)" : "rgba(184,85,85,0.35)"} bg={t.tradeSide === "BUY" ? "rgba(74,126,184,0.12)" : "rgba(184,85,85,0.12)"}>{t.tradeSide}</Tag>
                       <Tag>{t.instrument}</Tag>
-                      {t.rr != null && <Tag color="#7dcb9a" border="rgba(74,158,106,0.3)" bg="rgba(74,158,106,0.08)">{t.rr.toFixed(2)}R</Tag>}
+                      {t.rr != null && <RRTag t={t} />}
                       {t.setupTag && t.setupTag !== "unknown" && <Tag>{t.setupTag === "A" ? "Setup A" : t.setupTag === "B" ? "Setup B" : t.setupTag}</Tag>}
                     </div>
                     {t.note?.trim() && <div style={{ marginTop: 8, fontSize: 11, color: "rgba(232,224,208,0.35)", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any }}>{t.note.trim()}</div>}
@@ -965,7 +1202,7 @@ function HistoryPageInner(): React.ReactElement {
                           <Tag color={oc(ok)} border={obdr(ok)} bg={ob(ok)}>{ok === "win" ? "✅ Win" : ok === "loss" ? "❌ Loss" : ok === "be" ? "◻︎ BE" : "—"}</Tag>
                         </td>
                         <td style={{ padding: "12px 12px 12px 0" }}>
-                          {t.rr != null ? <Tag color="#7dcb9a" border="rgba(74,158,106,0.3)" bg="rgba(74,158,106,0.08)">{t.rr.toFixed(2)}R</Tag> : <span style={{ color: "rgba(232,224,208,0.25)", fontSize: 12 }}>—</span>}
+                          <RRTag t={t} />
                         </td>
                         <td style={{ padding: "12px 12px 12px 0" }}>
                           <Tag color={t.followedPlan === "yes" ? "#7dcb9a" : "#e08888"} border={t.followedPlan === "yes" ? "rgba(74,158,106,0.3)" : "rgba(184,85,85,0.3)"} bg={t.followedPlan === "yes" ? "rgba(74,158,106,0.08)" : "rgba(184,85,85,0.08)"}>{t.followedPlan === "yes" ? "Sí" : "No"}</Tag>
@@ -1001,65 +1238,187 @@ function HistoryPageInner(): React.ReactElement {
       {/* Modal edición */}
       {editTrade && (
         <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(4,3,1,0.88)", backdropFilter: "blur(12px)", padding: 20 }}>
-          <div style={{ ...card, width: "100%", maxWidth: 520, maxHeight: "90vh", overflowY: "auto" }}>
+          <div style={{ ...card, width: "100%", maxWidth: 560, maxHeight: "92vh", overflowY: "auto" }}>
             <div style={{ fontSize: 14, fontWeight: 900, color: "rgba(232,224,208,0.88)", marginBottom: 4 }}>Editar trade</div>
-            <div style={{ fontSize: 10, color: "rgba(232,224,208,0.25)", marginBottom: 20 }}>{editTrade.id.slice(0, 8)}…</div>
-            <div style={{ display: "grid", gap: 14 }}>
-              <div>
-                <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>FECHA</div>
-                <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} style={{ height: 36, padding: "0 12px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.18)", background: "rgba(0,0,0,0.35)", color: "rgba(232,224,208,0.9)", fontSize: 13, fontWeight: 600, outline: "none", width: "100%", boxSizing: "border-box" }} />
-              </div>
-              <div>
-                <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>HORA</div>
-                <input value={editTime} onChange={e => setEditTime(e.target.value)} placeholder="HH:MM" style={{ height: 36, padding: "0 12px", borderRadius: 10, border: `1px solid ${editTime && !isValidHHMM(editTime) ? "rgba(184,85,85,0.5)" : "rgba(180,140,80,0.18)"}`, background: "rgba(0,0,0,0.35)", color: "rgba(232,224,208,0.9)", fontSize: 13, fontWeight: 600, outline: "none", width: 100 }} />
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>INSTRUMENTO</div>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    {(["NQ", "ES"] as Instrument[]).map(ins => (
-                      <button key={ins} onClick={() => setEditInstrument(ins)} style={pill(editInstrument === ins)}>{ins}</button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>DIRECCIÓN</div>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={() => setEditSide("BUY")} style={pill(editSide === "BUY")}>BUY</button>
-                    <button onClick={() => setEditSide("SELL")} style={pill(editSide === "SELL")}>SELL</button>
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>RESULTADO</div>
-                  <select value={editOutcome} onChange={e => setEditOutcome(e.target.value as OutcomeDb)} style={{ height: 36, padding: "0 10px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.18)", background: "rgba(0,0,0,0.4)", color: "rgba(232,224,208,0.8)", fontSize: 12, fontWeight: 700, outline: "none" }}>
-                    <option value="unknown">—</option><option value="win">Win</option><option value="loss">Loss</option><option value="be">BE</option>
-                  </select>
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>RR</div>
-                  <input value={editRR} onChange={e => setEditRR(e.target.value)} placeholder="2.5" style={{ height: 36, padding: "0 12px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.18)", background: "rgba(0,0,0,0.35)", color: "rgba(232,224,208,0.9)", fontSize: 13, fontWeight: 600, outline: "none", width: 80 }} />
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>SETUP</div>
-                  <select value={editSetup} onChange={e => setEditSetup(e.target.value)} style={{ height: 36, padding: "0 10px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.18)", background: "rgba(0,0,0,0.4)", color: "rgba(232,224,208,0.8)", fontSize: 12, fontWeight: 700, outline: "none" }}>
-                    <option value="unknown">—</option><option value="A">Setup A</option><option value="B">Setup B</option><option value="none">Sin setup</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>PLAN</div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button onClick={() => setEditFollowed("yes")} style={pill(editFollowed === "yes", "green")}>Cumplí ✓</button>
-                  <button onClick={() => setEditFollowed("no")} style={pill(editFollowed === "no", "red")}>No cumplí ✗</button>
-                </div>
-              </div>
-              <div>
-                <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>NOTA</div>
-                <textarea value={editNote} onChange={e => setEditNote(e.target.value)} rows={4} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.15)", background: "rgba(0,0,0,0.3)", color: "rgba(232,224,208,0.85)", fontSize: 13, fontWeight: 500, outline: "none", resize: "vertical", lineHeight: 1.7, fontFamily: "inherit", boxSizing: "border-box" }} />
-              </div>
+            <div style={{ fontSize: 10, color: "rgba(232,224,208,0.25)", marginBottom: 16 }}>{editTrade.id.slice(0, 8)}…</div>
+
+            {/* Tabs */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
+              {(["trade", "contexto"] as const).map(tab => (
+                <button key={tab} onClick={() => setEditModalTab(tab)} style={{
+                  height: 30, padding: "0 16px", borderRadius: 999, cursor: "pointer",
+                  border: `1px solid ${editModalTab === tab ? "rgba(200,146,58,0.45)" : "rgba(180,140,80,0.12)"}`,
+                  background: editModalTab === tab ? "rgba(200,146,58,0.09)" : "transparent",
+                  color: editModalTab === tab ? "#c8923a" : "rgba(232,224,208,0.35)",
+                  fontSize: 11, fontWeight: 700,
+                }}>{tab === "trade" ? "Trade" : "Contexto ICT"}</button>
+              ))}
             </div>
+
+            {/* Tab: Trade */}
+            {editModalTab === "trade" && (
+              <div style={{ display: "grid", gap: 14 }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>FECHA</div>
+                  <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} style={{ height: 36, padding: "0 12px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.18)", background: "rgba(0,0,0,0.35)", color: "rgba(232,224,208,0.9)", fontSize: 13, fontWeight: 600, outline: "none", width: "100%", boxSizing: "border-box" }} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>HORA</div>
+                  <input value={editTime} onChange={e => setEditTime(e.target.value)} placeholder="HH:MM" style={{ height: 36, padding: "0 12px", borderRadius: 10, border: `1px solid ${editTime && !isValidHHMM(editTime) ? "rgba(184,85,85,0.5)" : "rgba(180,140,80,0.18)"}`, background: "rgba(0,0,0,0.35)", color: "rgba(232,224,208,0.9)", fontSize: 13, fontWeight: 600, outline: "none", width: 100 }} />
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>INSTRUMENTO</div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {(["NQ", "ES"] as Instrument[]).map(ins => (
+                        <button key={ins} onClick={() => setEditInstrument(ins)} style={pill(editInstrument === ins)}>{ins}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>DIRECCIÓN</div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => setEditSide("BUY")} style={pill(editSide === "BUY")}>BUY</button>
+                      <button onClick={() => setEditSide("SELL")} style={pill(editSide === "SELL")}>SELL</button>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>RESULTADO</div>
+                    <select value={editOutcome} onChange={e => setEditOutcome(e.target.value as OutcomeDb)} style={{ height: 36, padding: "0 10px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.18)", background: "rgba(0,0,0,0.4)", color: "rgba(232,224,208,0.8)", fontSize: 12, fontWeight: 700, outline: "none" }}>
+                      <option value="unknown">—</option><option value="win">Win</option><option value="loss">Loss</option><option value="be">BE</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>RR</div>
+                    <input value={editRR} onChange={e => setEditRR(e.target.value)} placeholder="2.5" style={{ height: 36, padding: "0 12px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.18)", background: "rgba(0,0,0,0.35)", color: "rgba(232,224,208,0.9)", fontSize: 13, fontWeight: 600, outline: "none", width: 80 }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>SETUP</div>
+                    <select value={editSetup} onChange={e => setEditSetup(e.target.value)} style={{ height: 36, padding: "0 10px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.18)", background: "rgba(0,0,0,0.4)", color: "rgba(232,224,208,0.8)", fontSize: 12, fontWeight: 700, outline: "none" }}>
+                      <option value="unknown">—</option><option value="A">Setup A</option><option value="B">Setup B</option><option value="none">Sin setup</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>PLAN</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => setEditFollowed("yes")} style={pill(editFollowed === "yes", "green")}>Cumplí ✓</button>
+                    <button onClick={() => setEditFollowed("no")} style={pill(editFollowed === "no", "red")}>No cumplí ✗</button>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>NOTA</div>
+                  <textarea value={editNote} onChange={e => setEditNote(e.target.value)} rows={4} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.15)", background: "rgba(0,0,0,0.3)", color: "rgba(232,224,208,0.85)", fontSize: 13, fontWeight: 500, outline: "none", resize: "vertical", lineHeight: 1.7, fontFamily: "inherit", boxSizing: "border-box" }} />
+                </div>
+              </div>
+            )}
+
+            {/* Tab: Contexto ICT */}
+            {editModalTab === "contexto" && (
+              <div style={{ display: "grid", gap: 18 }}>
+
+                {/* Sección 1 — Apertura */}
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "rgba(200,146,58,0.6)", marginBottom: 12, letterSpacing: "0.1em" }}>1 · CONTEXTO APERTURA</div>
+
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.12em" }}>¿HUBO SWEEP HTF EN LA APERTURA?</div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                    <button onClick={() => setEditAmSweep(editAmSweep === "si" ? null : "si")} style={pill(editAmSweep === "si", "green")}>Sí</button>
+                    <button onClick={() => { setEditAmSweep(editAmSweep === "no" ? null : "no"); setEditAmSweepNivel(null); setEditAmReac(null); }} style={pill(editAmSweep === "no", "red")}>No</button>
+                  </div>
+
+                  {editAmSweep === "si" && (
+                    <>
+                      <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.12em" }}>NIVEL MÁS IMPORTANTE</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+                        {(["PDH","PDL","London H","London L","Asia H","Asia L","Weekly H","Weekly L"] as const).map(l => (
+                          <button key={l} onClick={() => setEditAmSweepNivel(editAmSweepNivel === l ? null : l)} style={pill(editAmSweepNivel === l)}>{l}</button>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.12em" }}>REACCIÓN</div>
+                      <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                        <button onClick={() => setEditAmReac(editAmReac === "absorbio" ? null : "absorbio")} style={pill(editAmReac === "absorbio", "amber")}>Absorbió</button>
+                        <button onClick={() => setEditAmReac(editAmReac === "acepto" ? null : "acepto")} style={pill(editAmReac === "acepto", "green")}>Aceptó</button>
+                      </div>
+                    </>
+                  )}
+
+                  <div style={{ height: 1, background: "rgba(180,140,80,0.09)", margin: "12px 0" }} />
+
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.12em" }}>DIRECCIÓN DE LA AM</div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                    <button onClick={() => setEditAmDir(editAmDir === "alcista" ? null : "alcista")} style={pill(editAmDir === "alcista", "green")}>Alcista</button>
+                    <button onClick={() => setEditAmDir(editAmDir === "bajista" ? null : "bajista")} style={pill(editAmDir === "bajista", "red")}>Bajista</button>
+                    <button onClick={() => setEditAmDir(editAmDir === "sin-dir" ? null : "sin-dir")} style={pill(editAmDir === "sin-dir", "amber")}>Sin dir.</button>
+                  </div>
+
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.12em" }}>HTF H1/H4</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => setEditHtfStruct(editHtfStruct === "alcista" ? null : "alcista")} style={pill(editHtfStruct === "alcista", "green")}>Alcista</button>
+                    <button onClick={() => setEditHtfStruct(editHtfStruct === "bajista" ? null : "bajista")} style={pill(editHtfStruct === "bajista", "red")}>Bajista</button>
+                  </div>
+                </div>
+
+                {/* Sección 2 — Estado actual */}
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "rgba(200,146,58,0.6)", marginBottom: 12, letterSpacing: "0.1em" }}>2 · ESTADO ACTUAL DE SESIÓN</div>
+
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.12em" }}>¿SE TOMÓ NIVEL HTF EN LA SESIÓN?</div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                    <button onClick={() => setEditPmSweep(editPmSweep === "si" ? null : "si")} style={pill(editPmSweep === "si", "green")}>Sí</button>
+                    <button onClick={() => { setEditPmSweep(editPmSweep === "no" ? null : "no"); setEditPmSweepNivel(null); setEditPmReac(null); }} style={pill(editPmSweep === "no", "red")}>No</button>
+                  </div>
+
+                  {editPmSweep === "si" && (
+                    <>
+                      <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.12em" }}>NIVEL MÁS RECIENTE</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+                        {(["PDH","PDL","London H","London L","Asia H","Asia L","Weekly H","Weekly L"] as const).map(l => (
+                          <button key={l} onClick={() => setEditPmSweepNivel(editPmSweepNivel === l ? null : l)} style={pill(editPmSweepNivel === l)}>{l}</button>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.12em" }}>REACCIÓN</div>
+                      <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                        <button onClick={() => setEditPmReac(editPmReac === "absorbio" ? null : "absorbio")} style={pill(editPmReac === "absorbio", "amber")}>Absorbió</button>
+                        <button onClick={() => setEditPmReac(editPmReac === "acepto" ? null : "acepto")} style={pill(editPmReac === "acepto", "green")}>Aceptó</button>
+                      </div>
+                    </>
+                  )}
+
+                  <div style={{ height: 1, background: "rgba(180,140,80,0.09)", margin: "12px 0" }} />
+
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.12em" }}>ESTRUCTURA M15 AHORA</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => setEditM15Struct(editM15Struct === "alcista" ? null : "alcista")} style={pill(editM15Struct === "alcista", "green")}>Alcista</button>
+                    <button onClick={() => setEditM15Struct(editM15Struct === "bajista" ? null : "bajista")} style={pill(editM15Struct === "bajista", "red")}>Bajista</button>
+                  </div>
+                </div>
+
+                {/* Sección 3 — CISD */}
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "rgba(200,146,58,0.6)", marginBottom: 12, letterSpacing: "0.1em" }}>3 · UPDATE DELIVERY</div>
+
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.12em" }}>¿HAY CISD M15 ACTIVO?</div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                    <button onClick={() => setEditHasCisd(editHasCisd === "si" ? null : "si")} style={pill(editHasCisd === "si", "green")}>Sí</button>
+                    <button onClick={() => { setEditHasCisd(editHasCisd === "no" ? null : "no"); setEditCisdDir(null); }} style={pill(editHasCisd === "no", "red")}>No</button>
+                  </div>
+
+                  {editHasCisd === "si" && (
+                    <>
+                      <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.12em" }}>CISD M15 DIRECCIÓN</div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button onClick={() => setEditCisdDir(editCisdDir === "alcista" ? null : "alcista")} style={pill(editCisdDir === "alcista", "green")}>Alcista</button>
+                        <button onClick={() => setEditCisdDir(editCisdDir === "bajista" ? null : "bajista")} style={pill(editCisdDir === "bajista", "red")}>Bajista</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div style={{ marginTop: 20, display: "flex", gap: 8 }}>
               <button onClick={saveEdit} disabled={editSaving} style={{ flex: 1, height: 40, borderRadius: 999, cursor: "pointer", border: "1px solid rgba(200,146,58,0.38)", background: "rgba(200,146,58,0.09)", color: "#c8923a", fontSize: 12, fontWeight: 800, opacity: editSaving ? 0.5 : 1 }}>{editSaving ? "Guardando…" : "Guardar cambios"}</button>
               <button onClick={() => setEditTrade(null)} style={{ height: 40, padding: "0 18px", borderRadius: 999, cursor: "pointer", border: "1px solid rgba(180,140,80,0.12)", background: "transparent", color: "rgba(232,224,208,0.35)", fontSize: 12, fontWeight: 700 }}>Cancelar</button>
