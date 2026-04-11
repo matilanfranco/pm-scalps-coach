@@ -15,7 +15,7 @@ import type {
 type Outcome = "PROFIT" | "STOP" | "BE" | "NONE";
 type Mode = "journal" | "pretrade";
 type EmotionalState = "calm" | "nervous" | "frustrated" | "rushed";
-type ConfirmationCandle = "m5" | "m2" | null;
+type ConfirmationCandle = "m5" | "m2" | "sin-confirmacion" | null;
 type ErrorTag = "overtrading" | "against_m15" | "no_confirmation" | "phone" | "distraction" | "revenge" | null;
 type PreSection = 1 | 2 | 3;
 
@@ -298,6 +298,7 @@ export default function Page() {
         pmSweepNivel, pmReac, m15Struct, cisdDir,
         contextTag: contextResult.contextTag,
         htfAligned: contextResult.htfAligned,
+        confirmationCandle: confirmationCandle ?? null,
       });
       setLastSavedTradeId(tradeId);
       await uploadChart({ tradeId });
@@ -472,6 +473,7 @@ export default function Page() {
                   <div style={{ display:"flex", gap:6 }}>
                     <Btn active={confirmationCandle === "m5"} variant="amber" onClick={() => setConfirmationCandle(confirmationCandle === "m5" ? null : "m5")}>M5</Btn>
                     <Btn active={confirmationCandle === "m2"} variant="amber" onClick={() => setConfirmationCandle(confirmationCandle === "m2" ? null : "m2")}>M2</Btn>
+                    <Btn active={confirmationCandle === "sin-confirmacion"} variant="red" onClick={() => setConfirmationCandle(confirmationCandle === "sin-confirmacion" ? null : "sin-confirmacion")}>Sin confirmación</Btn>
                   </div>
                 </div>
               </div>

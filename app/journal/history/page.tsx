@@ -908,7 +908,19 @@ function HistoryPageInner(): React.ReactElement {
   const [from, setFrom] = useState(searchParams?.get("from") || "");
   const [to, setTo] = useState(searchParams?.get("to") || "");
   const [q, setQ] = useState(searchParams?.get("q") || "");
-  const [page, setPage] = useState(Number(searchParams?.get("p") || 1));
+  const [page, setPage] = useState(() => {
+    const fromUrl = Number(searchParams?.get("p"));
+    if (fromUrl > 0) return fromUrl;
+    try {
+      const saved = Number(sessionStorage.getItem("history_page"));
+      return saved > 0 ? saved : 1;
+    } catch { return 1; }
+  });
+
+  // Persistir página en sessionStorage
+  useEffect(() => {
+    try { sessionStorage.setItem("history_page", String(page)); } catch {}
+  }, [page]);
   const pageSize = 15;
 
   const updateUrl = useCallback(() => {
@@ -951,6 +963,7 @@ function HistoryPageInner(): React.ReactElement {
   const [editHasCisd, setEditHasCisd] = useState<"si"|"no"|null>(null);
   const [editCisdDir, setEditCisdDir] = useState<import("@/lib/types").CisdDir>(null);
   const [editModalTab, setEditModalTab] = useState<"trade"|"contexto">("trade");
+  const [editConfirmationCandle, setEditConfirmationCandle] = useState<"m5"|"m2"|"sin-confirmacion"|null>(null);
 
   useEffect(() => {
     if (!supabase) return;
@@ -973,22 +986,27 @@ function HistoryPageInner(): React.ReactElement {
   }, [supabase]);
 
   // Auto-abrir modal de edición si viene ?edit=<id> desde el detalle
+  const pendingEditId = useRef<string | null>(searchParams?.get("edit") || null);
   useEffect(() => {
-    const editId = searchParams?.get("edit");
-    if (!editId || allTrades.length === 0) return;
-    const t = allTrades.find(x => x.id === editId);
+    if (!pendingEditId.current || allTrades.length === 0) return;
+    const t = allTrades.find(x => x.id === pendingEditId.current);
     if (t) {
       openEdit(t);
-      // Limpiar el param de la URL sin recargar
+      pendingEditId.current = null;
       const url = new URL(window.location.href);
       url.searchParams.delete("edit");
       window.history.replaceState(null, "", url.toString());
     }
-  }, [searchParams, allTrades]);
-  const isFirstRender = useRef(true);
+  }, [allTrades]);
+  const prevFilters = useRef({ fOutcome, fSide, fWeekday, fContext, from, to, q });
   useEffect(() => {
-    if (isFirstRender.current) { isFirstRender.current = false; return; }
-    setPage(1);
+    const prev = prevFilters.current;
+    const changed =
+      prev.fOutcome !== fOutcome || prev.fSide !== fSide ||
+      prev.fWeekday !== fWeekday || prev.fContext !== fContext ||
+      prev.from !== from || prev.to !== to || prev.q !== q;
+    prevFilters.current = { fOutcome, fSide, fWeekday, fContext, from, to, q };
+    if (changed) setPage(1);
   }, [fOutcome, fSide, fWeekday, fContext, from, to, q]);
 
   const filtered = useMemo(() => {
@@ -1027,8 +1045,11 @@ function HistoryPageInner(): React.ReactElement {
     if (page > 1) params.set("p", String(page));
     const qs = params.toString();
     const returnUrl = qs ? `/journal/history?${qs}` : "/journal/history";
-    return `/journal/history/${tradeId}?back=${encodeURIComponent(returnUrl)}`;
-  }, [fOutcome, fSide, fWeekday, fContext, from, to, q, page]);
+    // Pasar lista de IDs del filtro actual para navegación en el detalle
+    const ids = filtered.map(t => t.id).join(",");
+    let url = `/journal/history/${tradeId}?back=${encodeURIComponent(returnUrl)}&ids=${encodeURIComponent(ids)}`;
+    return url;
+  }, [fOutcome, fSide, fWeekday, fContext, from, to, q, page, filtered]);
 
   function openEdit(t: TradeEntry) {
     setEditTrade(t); setEditDate(formatYMD(t.createdAt)); setEditTime(t.tradeTime || "");
@@ -1037,6 +1058,8 @@ function HistoryPageInner(): React.ReactElement {
     setEditOutcome(normalizeOutcome(t.outcome)); setEditSetup(t.setupTag ?? "unknown");
     setEditNote(t.note ?? ""); setEditInstrument(t.instrument ?? "NQ");
     setEditModalTab("trade");
+    // Contexto
+    setEditConfirmationCandle((t as any).confirmationCandle ?? null);
     // Contexto
     setEditAmSweep(t.amSweepNivel ? "si" : t.amDir ? "no" : null);
     setEditAmSweepNivel(t.amSweepNivel ?? null);
@@ -1072,6 +1095,7 @@ function HistoryPageInner(): React.ReactElement {
         htfStruct: editHtfStruct, pmSweepNivel: editPmSweepNivel, pmReac: editPmReac,
         m15Struct: editM15Struct, cisdDir: editCisdDir,
         contextTag: ctxResult.contextTag, htfAligned: ctxResult.htfAligned,
+        confirmationCandle: editConfirmationCandle,
       });
       setAllTrades(prev => {
         const next = prev.map(t => t.id !== editTrade.id ? t : {
@@ -1082,10 +1106,13 @@ function HistoryPageInner(): React.ReactElement {
           htfStruct: editHtfStruct, pmSweepNivel: editPmSweepNivel, pmReac: editPmReac,
           m15Struct: editM15Struct, cisdDir: editCisdDir,
           contextTag: ctxResult.contextTag, htfAligned: ctxResult.htfAligned,
+          confirmationCandle: editConfirmationCandle,
         });
         localStorage.setItem(LS_KEY, JSON.stringify(next)); return next;
       });
+      const tradeId = editTrade.id;
       setEditTrade(null);
+      router.push(backUrl(tradeId));
     } catch { alert("No se pudo guardar."); }
     finally { setEditSaving(false); }
   }
@@ -1383,6 +1410,15 @@ function HistoryPageInner(): React.ReactElement {
                   </div>
                 </div>
                 <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>CONFIRMACIÓN</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button onClick={() => setEditConfirmationCandle(null)} style={pill(editConfirmationCandle === null, "default")}>— Sin info</button>
+                    <button onClick={() => setEditConfirmationCandle("m5")} style={pill(editConfirmationCandle === "m5", "amber")}>M5</button>
+                    <button onClick={() => setEditConfirmationCandle("m2")} style={pill(editConfirmationCandle === "m2", "amber")}>M2</button>
+                    <button onClick={() => setEditConfirmationCandle("sin-confirmacion")} style={pill(editConfirmationCandle === "sin-confirmacion", "red")}>Sin confirmación</button>
+                  </div>
+                </div>
+                <div>
                   <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 6, letterSpacing: "0.15em" }}>NOTA</div>
                   <textarea value={editNote} onChange={e => setEditNote(e.target.value)} rows={4} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.15)", background: "rgba(0,0,0,0.3)", color: "rgba(232,224,208,0.85)", fontSize: 13, fontWeight: 500, outline: "none", resize: "vertical", lineHeight: 1.7, fontFamily: "inherit", boxSizing: "border-box" }} />
                 </div>
@@ -1495,7 +1531,7 @@ function HistoryPageInner(): React.ReactElement {
 
             <div style={{ marginTop: 20, display: "flex", gap: 8 }}>
               <button onClick={saveEdit} disabled={editSaving} style={{ flex: 1, height: 40, borderRadius: 999, cursor: "pointer", border: "1px solid rgba(200,146,58,0.38)", background: "rgba(200,146,58,0.09)", color: "#c8923a", fontSize: 12, fontWeight: 800, opacity: editSaving ? 0.5 : 1 }}>{editSaving ? "Guardando…" : "Guardar cambios"}</button>
-              <button onClick={() => setEditTrade(null)} style={{ height: 40, padding: "0 18px", borderRadius: 999, cursor: "pointer", border: "1px solid rgba(180,140,80,0.12)", background: "transparent", color: "rgba(232,224,208,0.35)", fontSize: 12, fontWeight: 700 }}>Cancelar</button>
+              <button onClick={() => { const id = editTrade?.id; setEditTrade(null); if (id) router.push(backUrl(id)); }} style={{ height: 40, padding: "0 18px", borderRadius: 999, cursor: "pointer", border: "1px solid rgba(180,140,80,0.12)", background: "transparent", color: "rgba(232,224,208,0.35)", fontSize: 12, fontWeight: 700 }}>Cancelar</button>
             </div>
           </div>
         </div>

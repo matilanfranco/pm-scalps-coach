@@ -53,6 +53,7 @@ export type TradeEntryDb = {
   cisdDir?: CisdDir;
   contextTag?: ContextTag;
   htfAligned?: boolean | null;
+  confirmationCandle?: "m5" | "m2" | "sin-confirmacion" | null;
 };
 
 function mapRow(r: any) {
@@ -102,6 +103,7 @@ function mapRow(r: any) {
     cisdDir: r.cisd_dir ?? null,
     contextTag: r.context_tag ?? null,
     htfAligned: r.htf_aligned ?? null,
+    confirmationCandle: r.confirmation_candle ?? null,
   };
 }
 
@@ -150,6 +152,7 @@ export async function createTrade(trade: TradeEntryDb) {
     cisd_dir: trade.cisdDir ?? null,
     context_tag: trade.contextTag ?? null,
     htf_aligned: trade.htfAligned ?? null,
+    confirmation_candle: trade.confirmationCandle ?? null,
   };
 
   const { data, error } = await sb()
@@ -247,6 +250,7 @@ export async function updateTrade(
     cisdDir?: CisdDir;
     contextTag?: ContextTag;
     htfAligned?: boolean | null;
+    confirmationCandle?: "m5" | "m2" | "sin-confirmacion" | null;
   }
 ) {
   const payload: Record<string, any> = {};
@@ -274,6 +278,7 @@ export async function updateTrade(
   if (patch.cisdDir !== undefined)      payload.cisd_dir      = patch.cisdDir;
   if (patch.contextTag !== undefined)   payload.context_tag   = patch.contextTag;
   if (patch.htfAligned !== undefined)   payload.htf_aligned   = patch.htfAligned;
+  if (patch.confirmationCandle !== undefined) payload.confirmation_candle = patch.confirmationCandle;
 
   const { error } = await sb().from("trades").update(payload).eq("id", tradeId);
   if (error) throw error;
