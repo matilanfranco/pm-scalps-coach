@@ -411,9 +411,12 @@ export default function TradeDetailPage() {
               </div>
             )}
 
-            <div style={{ paddingTop:8 }}>
+            <div style={{ paddingTop:8, display:"flex", gap:8 }}>
               <button onClick={() => router.push(backUrl)} style={{ height:38,padding:"0 20px",borderRadius:999,cursor:"pointer",border:"1px solid rgba(180,140,80,0.18)",background:"transparent",color:"rgba(200,146,58,0.55)",fontSize:12,fontWeight:700 }}>
-                ← Volver al historial
+                ← Volver
+              </button>
+              <button onClick={() => router.push(`${backUrl}${backUrl.includes('?') ? '&' : '?'}edit=${trade.id}`)} style={{ height:38,padding:"0 20px",borderRadius:999,cursor:"pointer",border:"1px solid rgba(200,146,58,0.4)",background:"rgba(200,146,58,0.09)",color:"#c8923a",fontSize:12,fontWeight:700 }}>
+                ✎ Editar trade
               </button>
             </div>
           </div>

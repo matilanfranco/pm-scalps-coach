@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, Suspense } from "react";
+import { useEffect, useMemo, useState, useCallback, Suspense, useRef } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabaseClient";
@@ -972,7 +972,24 @@ function HistoryPageInner(): React.ReactElement {
     return () => { alive = false; };
   }, [supabase]);
 
-  useEffect(() => { setPage(1); }, [fOutcome, fSide, fWeekday, fContext, from, to, q]);
+  // Auto-abrir modal de edición si viene ?edit=<id> desde el detalle
+  useEffect(() => {
+    const editId = searchParams?.get("edit");
+    if (!editId || allTrades.length === 0) return;
+    const t = allTrades.find(x => x.id === editId);
+    if (t) {
+      openEdit(t);
+      // Limpiar el param de la URL sin recargar
+      const url = new URL(window.location.href);
+      url.searchParams.delete("edit");
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, [searchParams, allTrades]);
+  const isFirstRender = useRef(true);
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    setPage(1);
+  }, [fOutcome, fSide, fWeekday, fContext, from, to, q]);
 
   const filtered = useMemo(() => {
     const ql = q.trim().toLowerCase();
