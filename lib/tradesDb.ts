@@ -54,6 +54,9 @@ export type TradeEntryDb = {
   contextTag?: ContextTag;
   htfAligned?: boolean | null;
   confirmationCandle?: "m5" | "m2" | "sin-confirmacion" | null;
+  smtStructural?: boolean | null;
+  smtEntry?: boolean | null;
+  amdPresented?: boolean | null;
 };
 
 function mapRow(r: any) {
@@ -104,6 +107,9 @@ function mapRow(r: any) {
     contextTag: r.context_tag ?? null,
     htfAligned: r.htf_aligned ?? null,
     confirmationCandle: r.confirmation_candle ?? null,
+    smtStructural: r.smt_structural ?? null,
+    smtEntry: r.smt_entry ?? null,
+    amdPresented: r.amd_presented ?? null,
   };
 }
 
@@ -153,6 +159,9 @@ export async function createTrade(trade: TradeEntryDb) {
     context_tag: trade.contextTag ?? null,
     htf_aligned: trade.htfAligned ?? null,
     confirmation_candle: trade.confirmationCandle ?? null,
+    smt_structural: trade.smtStructural ?? null,
+    smt_entry: trade.smtEntry ?? null,
+    amd_presented: trade.amdPresented ?? null,
   };
 
   const { data, error } = await sb()
@@ -251,6 +260,9 @@ export async function updateTrade(
     contextTag?: ContextTag;
     htfAligned?: boolean | null;
     confirmationCandle?: "m5" | "m2" | "sin-confirmacion" | null;
+    smtStructural?: boolean | null;
+    smtEntry?: boolean | null;
+    amdPresented?: boolean | null;
   }
 ) {
   const payload: Record<string, any> = {};
@@ -279,6 +291,9 @@ export async function updateTrade(
   if (patch.contextTag !== undefined)   payload.context_tag   = patch.contextTag;
   if (patch.htfAligned !== undefined)   payload.htf_aligned   = patch.htfAligned;
   if (patch.confirmationCandle !== undefined) payload.confirmation_candle = patch.confirmationCandle;
+  if (patch.smtStructural !== undefined) payload.smt_structural = patch.smtStructural;
+  if (patch.smtEntry !== undefined) payload.smt_entry = patch.smtEntry;
+  if (patch.amdPresented !== undefined) payload.amd_presented = patch.amdPresented;
 
   const { error } = await sb().from("trades").update(payload).eq("id", tradeId);
   if (error) throw error;

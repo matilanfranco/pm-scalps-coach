@@ -274,6 +274,27 @@ export default function TradeDetailPage() {
                       </Tag>
                     </Row>
                   )}
+                  {(trade as any).smtStructural !== null && (trade as any).smtStructural !== undefined && (
+                    <Row label="SMT ESTRUCTURAL">
+                      <Tag color={(trade as any).smtStructural ? "#85b0e0" : "rgba(232,224,208,0.35)"} border={(trade as any).smtStructural ? "rgba(74,126,184,0.3)" : "rgba(180,140,80,0.15)"} bg={(trade as any).smtStructural ? "rgba(74,126,184,0.08)" : "transparent"}>
+                        {(trade as any).smtStructural ? "Sí · a favor" : "No"}
+                      </Tag>
+                    </Row>
+                  )}
+                  {(trade as any).smtEntry !== null && (trade as any).smtEntry !== undefined && (
+                    <Row label="SMT ENTRY">
+                      <Tag color={(trade as any).smtEntry ? "#85b0e0" : "rgba(232,224,208,0.35)"} border={(trade as any).smtEntry ? "rgba(74,126,184,0.3)" : "rgba(180,140,80,0.15)"} bg={(trade as any).smtEntry ? "rgba(74,126,184,0.08)" : "transparent"}>
+                        {(trade as any).smtEntry ? "Sí · M2/M5" : "No"}
+                      </Tag>
+                    </Row>
+                  )}
+                  {(trade as any).amdPresented !== null && (trade as any).amdPresented !== undefined && (
+                    <Row label="AMD PREVIO">
+                      <Tag color={(trade as any).amdPresented ? "#7dcb9a" : "rgba(232,224,208,0.35)"} border={(trade as any).amdPresented ? "rgba(74,158,106,0.3)" : "rgba(180,140,80,0.15)"} bg={(trade as any).amdPresented ? "rgba(74,158,106,0.08)" : "transparent"}>
+                        {(trade as any).amdPresented ? "Sí" : "No"}
+                      </Tag>
+                    </Row>
+                  )}
                 </div>
               </div>
             )}

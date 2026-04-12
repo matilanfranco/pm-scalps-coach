@@ -170,7 +170,8 @@ export default function Page() {
   const [note, setNote] = useState("");
   const [emotionalState, setEmotionalState] = useState<EmotionalState|null>(null);
   const [errorTag, setErrorTag] = useState<ErrorTag>(null);
-  const [smt, setSmt] = useState<boolean|null>(null);
+  const [smtStructural, setSmtStructural] = useState<boolean|null>(null);
+  const [smtEntry, setSmtEntry] = useState<boolean|null>(null);
   const [amdPresented, setAmdPresented] = useState<boolean|null>(null);
   const [confirmationCandle, setConfirmationCandle] = useState<ConfirmationCandle>(null);
 
@@ -248,7 +249,7 @@ export default function Page() {
     setTradeSide("BUY"); setInstrument("NQ"); setSetupTag("unknown");
     setOutcome("NONE"); setFollowedPlan("yes"); setNumPartials(1);
     setPartialRRs(["","",""]); setNote(""); setEmotionalState(null);
-    setErrorTag(null); setSmt(null); setAmdPresented(null); setConfirmationCandle(null);
+    setErrorTag(null); setSmtStructural(null); setSmtEntry(null); setAmdPresented(null); setConfirmationCandle(null);
     setChartFile(null); setChartName(""); setChartStatus("idle");
   }
 
@@ -299,6 +300,9 @@ export default function Page() {
         contextTag: contextResult.contextTag,
         htfAligned: contextResult.htfAligned,
         confirmationCandle: confirmationCandle ?? null,
+        smtStructural: smtStructural ?? null,
+        smtEntry: smtEntry ?? null,
+        amdPresented: amdPresented ?? null,
       });
       setLastSavedTradeId(tradeId);
       await uploadChart({ tradeId });
@@ -449,31 +453,42 @@ export default function Page() {
               {/* ICT */}
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
                 <span style={{ ...lbl, marginBottom:0 }}>ICT · CONTEXTO</span>
-                {(smt !== null || amdPresented !== null || confirmationCandle !== null) && (
-                  <ResetBtn onClick={() => { setSmt(null); setAmdPresented(null); setConfirmationCandle(null); }} />
+                {(smtStructural !== null || smtEntry !== null || amdPresented !== null || confirmationCandle !== null) && (
+                  <ResetBtn onClick={() => { setSmtStructural(null); setSmtEntry(null); setAmdPresented(null); setConfirmationCandle(null); }} />
                 )}
               </div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:16, alignItems:"flex-start" }}>
                 <div>
-                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:6 }}>SMT NQ/ES</div>
+                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:4 }}>SMT HTF LIQ. + CISD m15</div>
+                  <div style={{ fontSize:9, color:"rgba(232,224,208,0.2)", marginBottom:6 }}>NQ/ES divergen en nivel HTF a favor de mi entrada</div>
                   <div style={{ display:"flex", gap:6 }}>
-                    <Btn active={smt === true} variant="green" onClick={() => setSmt(smt === true ? null : true)}>Sí</Btn>
-                    <Btn active={smt === false} variant="red" onClick={() => setSmt(smt === false ? null : false)}>No</Btn>
+                    <Btn active={smtStructural === true} variant="green" onClick={() => setSmtStructural(smtStructural === true ? null : true)}>Sí</Btn>
+                    <Btn active={smtStructural === false} variant="red" onClick={() => setSmtStructural(smtStructural === false ? null : false)}>No</Btn>
                   </div>
                 </div>
                 <div>
-                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:6 }}>¿Se presentó AMD?</div>
+                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:4 }}>SMT DE ENTRY · M2/M5</div>
+                  <div style={{ fontSize:9, color:"rgba(232,224,208,0.2)", marginBottom:6 }}>Manipulación en zona antes de confirmar</div>
+                  <div style={{ display:"flex", gap:6 }}>
+                    <Btn active={smtEntry === true} variant="green" onClick={() => setSmtEntry(smtEntry === true ? null : true)}>Sí</Btn>
+                    <Btn active={smtEntry === false} variant="red" onClick={() => setSmtEntry(smtEntry === false ? null : false)}>No</Btn>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:4 }}>AMD PREVIO A ENTRY</div>
+                  <div style={{ fontSize:9, color:"rgba(232,224,208,0.2)", marginBottom:6 }}>Acumulación / Manipulación antes de entrar</div>
                   <div style={{ display:"flex", gap:6 }}>
                     <Btn active={amdPresented === true} variant="green" onClick={() => setAmdPresented(amdPresented === true ? null : true)}>Sí</Btn>
                     <Btn active={amdPresented === false} variant="red" onClick={() => setAmdPresented(amdPresented === false ? null : false)}>No</Btn>
                   </div>
                 </div>
                 <div>
-                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:6 }}>Vela confirmación</div>
+                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:4 }}>Vela confirmación</div>
+                  <div style={{ fontSize:9, color:"rgba(232,224,208,0.2)", marginBottom:6 }}>&nbsp;</div>
                   <div style={{ display:"flex", gap:6 }}>
                     <Btn active={confirmationCandle === "m5"} variant="amber" onClick={() => setConfirmationCandle(confirmationCandle === "m5" ? null : "m5")}>M5</Btn>
                     <Btn active={confirmationCandle === "m2"} variant="amber" onClick={() => setConfirmationCandle(confirmationCandle === "m2" ? null : "m2")}>M2</Btn>
-                    <Btn active={confirmationCandle === "sin-confirmacion"} variant="red" onClick={() => setConfirmationCandle(confirmationCandle === "sin-confirmacion" ? null : "sin-confirmacion")}>Sin confirmación</Btn>
+                    <Btn active={confirmationCandle === "sin-confirmacion"} variant="red" onClick={() => setConfirmationCandle(confirmationCandle === "sin-confirmacion" ? null : "sin-confirmacion")}>Sin conf.</Btn>
                   </div>
                 </div>
               </div>

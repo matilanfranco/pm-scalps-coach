@@ -16,6 +16,7 @@ type OutcomeKey = "all" | OutcomeDb;
 type Weekday = "ALL" | "Lunes" | "Martes" | "Miércoles" | "Jueves" | "Viernes";
 type ChartMode = "none" | "weekly" | "equity" | "marketstate" | "ai";
 type ContextFilter = "all" | "CONT-AM" | "CONT-AM-SWEEP" | "REVERSAL-SWEEP" | "REVERSAL-NO-SWEEP";
+type SmtFilter = "all" | "smt_structural" | "smt_entry" | "smt_both";
 
 type SavedAnalysis = {
   id: string;
@@ -314,6 +315,9 @@ function AIAnalysis({ trades }: { trades: TradeEntry[] }): React.ReactElement {
         ctx.pmSweepNivel ? `SweepSes:${ctx.pmSweepNivel}/${ctx.pmReac || "?"}` : null,
         ctx.m15Struct ? `M15:${ctx.m15Struct}` : null,
         ctx.cisdDir ? `CISD:${ctx.cisdDir}` : null,
+        ctx.smtStructural === true ? `SMT_struct:si` : ctx.smtStructural === false ? `SMT_struct:no` : null,
+        ctx.smtEntry === true ? `SMT_entry:si` : ctx.smtEntry === false ? `SMT_entry:no` : null,
+        ctx.amdPresented === true ? `AMD:si` : ctx.amdPresented === false ? `AMD:no` : null,
       ].filter(Boolean).join(" | ");
       return `${i + 1}. [${date} ${t.tradeTime || "??:??"}] ${t.instrument} ${t.tradeSide} | ${ok.toUpperCase()} ${rr} | Plan:${t.followedPlan}${ctxParts ? ` | [${ctxParts}]` : ""} | "${note}"`;
     }).join("\n");
@@ -787,7 +791,7 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
       {/* Horario */}
       <div style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.15em", color: "rgba(232,224,208,0.28)", marginBottom: 8 }}>POR HORARIO</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
           {([
             ["13:xx", (t: TradeEntry) => (t.tradeTime || "") >= "13:00" && (t.tradeTime || "") < "14:00"],
             ["14:xx", (t: TradeEntry) => (t.tradeTime || "") >= "14:00" && (t.tradeTime || "") < "15:00"],
@@ -824,6 +828,42 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
                 <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(232,224,208,0.3)", marginBottom: 3 }}>{day.slice(0, 3).toUpperCase()}</div>
                 <div style={{ fontSize: 14, fontWeight: 900, color: col }}>{wr.toFixed(0)}%</div>
                 <div style={{ fontSize: 9, color: "rgba(232,224,208,0.25)" }}>{g.length} trades</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* SMT Stats */}
+      <div style={{ marginTop: 16 }}>
+        <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.15em", color: "rgba(232,224,208,0.28)", marginBottom: 8 }}>CONFLUENCIA SMT</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
+          {([
+            { key: "smt_structural", label: "SMT HTF Liq. + CISD m15 a favor", desc: "NQ/ES en nivel HTF a favor de entrada", fn: (t: TradeEntry) => !!(t as any).smtStructural },
+            { key: "smt_entry",      label: "SMT Entry",       desc: "M2/M5 · manipulación zona", fn: (t: TradeEntry) => !!(t as any).smtEntry },
+            { key: "smt_both",       label: "SMT Ambos",       desc: "Estructural + Entry", fn: (t: TradeEntry) => !!(t as any).smtStructural && !!(t as any).smtEntry },
+            { key: "amd",             label: "AMD Previo",       desc: "AMD antes de entry",  fn: (t: TradeEntry) => !!(t as any).amdPresented },
+          ]).map(({ key, label, desc, fn }) => {
+            const g = trades.filter(fn);
+            const w = g.filter(t => outcomeKey(t) === "win").length;
+            const l = g.filter(t => outcomeKey(t) === "loss").length;
+            const wr = w + l > 0 ? w / (w + l) * 100 : 0;
+            const winRRs = g.filter(t => outcomeKey(t) === "win").map(t => safeRR(t)).filter((v): v is number => v !== null);
+            const netRR = winRRs.reduce((a, b) => a + b, 0) - l;
+            const col = wr >= 55 ? "#7dcb9a" : wr <= 40 ? "#e08888" : "#c8923a";
+            return (
+              <div key={key} style={{ padding: "12px 14px", borderRadius: 12, border: "1px solid rgba(74,126,184,0.2)", background: "rgba(74,126,184,0.05)" }}>
+                <div style={{ fontSize: 9, fontWeight: 800, color: "#85b0e0", marginBottom: 2, letterSpacing: "0.08em" }}>{label}</div>
+                <div style={{ fontSize: 9, color: "rgba(232,224,208,0.25)", marginBottom: 8 }}>{desc}</div>
+                {g.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "rgba(232,224,208,0.25)" }}>Sin datos</div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 20, fontWeight: 900, color: col }}>{wr.toFixed(0)}%</div>
+                    <div style={{ fontSize: 10, color: "rgba(232,224,208,0.35)", marginTop: 2 }}>{w}W · {l}L · {g.length} trades</div>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: netRR >= 0 ? "#7dcb9a" : "#e08888", marginTop: 2 }}>{netRR >= 0 ? "+" : ""}{netRR.toFixed(1)}R net</div>
+                  </>
+                )}
               </div>
             );
           })}
@@ -905,6 +945,7 @@ function HistoryPageInner(): React.ReactElement {
   const [fSide, setFSide] = useState<"all" | TradeSide>((searchParams?.get("side") as TradeSide) || "all");
   const [fWeekday, setFWeekday] = useState<Weekday>((searchParams?.get("day") as Weekday) || "ALL");
   const [fContext, setFContext] = useState<ContextFilter>((searchParams?.get("ctx") as ContextFilter) || "all");
+  const [fSmt, setFSmt] = useState<SmtFilter>((searchParams?.get("smt") as SmtFilter) || "all");
   const [from, setFrom] = useState(searchParams?.get("from") || "");
   const [to, setTo] = useState(searchParams?.get("to") || "");
   const [q, setQ] = useState(searchParams?.get("q") || "");
@@ -929,15 +970,16 @@ function HistoryPageInner(): React.ReactElement {
     if (fSide !== "all") params.set("side", fSide);
     if (fWeekday !== "ALL") params.set("day", fWeekday);
     if (fContext !== "all") params.set("ctx", fContext);
+    if (fSmt !== "all") params.set("smt", fSmt);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
     if (q) params.set("q", q);
     if (page > 1) params.set("p", String(page));
     const qs = params.toString();
     window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
-  }, [fOutcome, fSide, fWeekday, fContext, from, to, q, page, pathname]);
+  }, [fOutcome, fSide, fWeekday, fContext, fSmt, from, to, q, page, pathname]);
 
-  useEffect(() => { updateUrl(); }, [fOutcome, fSide, fWeekday, fContext, from, to, q, page]);
+  useEffect(() => { updateUrl(); }, [fOutcome, fSide, fWeekday, fContext, fSmt, from, to, q, page]);
 
   const [editTrade, setEditTrade] = useState<TradeEntry | null>(null);
   const [editDate, setEditDate] = useState("");
@@ -964,6 +1006,9 @@ function HistoryPageInner(): React.ReactElement {
   const [editCisdDir, setEditCisdDir] = useState<import("@/lib/types").CisdDir>(null);
   const [editModalTab, setEditModalTab] = useState<"trade"|"contexto">("trade");
   const [editConfirmationCandle, setEditConfirmationCandle] = useState<"m5"|"m2"|"sin-confirmacion"|null>(null);
+  const [editSmtStructural, setEditSmtStructural] = useState<boolean|null>(null);
+  const [editSmtEntry, setEditSmtEntry] = useState<boolean|null>(null);
+  const [editAmdPresented, setEditAmdPresented] = useState<boolean|null>(null);
 
   useEffect(() => {
     if (!supabase) return;
@@ -998,14 +1043,14 @@ function HistoryPageInner(): React.ReactElement {
       window.history.replaceState(null, "", url.toString());
     }
   }, [allTrades]);
-  const prevFilters = useRef({ fOutcome, fSide, fWeekday, fContext, from, to, q });
+  const prevFilters = useRef({ fOutcome, fSide, fWeekday, fContext, fSmt, from, to, q });
   useEffect(() => {
     const prev = prevFilters.current;
     const changed =
       prev.fOutcome !== fOutcome || prev.fSide !== fSide ||
-      prev.fWeekday !== fWeekday || prev.fContext !== fContext ||
+      prev.fWeekday !== fWeekday || prev.fContext !== fContext || prev.fSmt !== fSmt ||
       prev.from !== from || prev.to !== to || prev.q !== q;
-    prevFilters.current = { fOutcome, fSide, fWeekday, fContext, from, to, q };
+    prevFilters.current = { fOutcome, fSide, fWeekday, fContext, fSmt, from, to, q };
     if (changed) setPage(1);
   }, [fOutcome, fSide, fWeekday, fContext, from, to, q]);
 
@@ -1020,13 +1065,16 @@ function HistoryPageInner(): React.ReactElement {
       if (fOutcome !== "all" && outcomeKey(t) !== fOutcome) return false;
       if (fSide !== "all" && t.tradeSide !== fSide) return false;
       if (fContext !== "all" && (t as any).contextTag !== fContext) return false;
+      if (fSmt === "smt_structural" && !(t as any).smtStructural) return false;
+      if (fSmt === "smt_entry" && !(t as any).smtEntry) return false;
+      if (fSmt === "smt_both" && (!(t as any).smtStructural || !(t as any).smtEntry)) return false;
       if (ql) {
         const blob = [t.note || "", t.instrument || "", t.setupTag || "", t.tradeSide || ""].join(" ").toLowerCase();
         if (!blob.includes(ql)) return false;
       }
       return true;
     }).sort((a, b) => b.createdAt - a.createdAt);
-  }, [allTrades, fOutcome, fSide, fWeekday, fContext, from, to, q]);
+  }, [allTrades, fOutcome, fSide, fWeekday, fContext, fSmt, from, to, q]);
 
   const kpis = useMemo(() => computeKPIs(filtered), [filtered]);
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -1039,6 +1087,7 @@ function HistoryPageInner(): React.ReactElement {
     if (fSide !== "all") params.set("side", fSide);
     if (fWeekday !== "ALL") params.set("day", fWeekday);
     if (fContext !== "all") params.set("ctx", fContext);
+    if (fSmt !== "all") params.set("smt", fSmt);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
     if (q) params.set("q", q);
@@ -1060,6 +1109,9 @@ function HistoryPageInner(): React.ReactElement {
     setEditModalTab("trade");
     // Contexto
     setEditConfirmationCandle((t as any).confirmationCandle ?? null);
+    setEditSmtStructural((t as any).smtStructural ?? null);
+    setEditSmtEntry((t as any).smtEntry ?? null);
+    setEditAmdPresented((t as any).amdPresented ?? null);
     // Contexto
     setEditAmSweep(t.amSweepNivel ? "si" : t.amDir ? "no" : null);
     setEditAmSweepNivel(t.amSweepNivel ?? null);
@@ -1096,6 +1148,9 @@ function HistoryPageInner(): React.ReactElement {
         m15Struct: editM15Struct, cisdDir: editCisdDir,
         contextTag: ctxResult.contextTag, htfAligned: ctxResult.htfAligned,
         confirmationCandle: editConfirmationCandle,
+        smtStructural: editSmtStructural,
+        smtEntry: editSmtEntry,
+        amdPresented: editAmdPresented,
       });
       setAllTrades(prev => {
         const next = prev.map(t => t.id !== editTrade.id ? t : {
@@ -1107,6 +1162,9 @@ function HistoryPageInner(): React.ReactElement {
           m15Struct: editM15Struct, cisdDir: editCisdDir,
           contextTag: ctxResult.contextTag, htfAligned: ctxResult.htfAligned,
           confirmationCandle: editConfirmationCandle,
+          smtStructural: editSmtStructural,
+          smtEntry: editSmtEntry,
+          amdPresented: editAmdPresented,
         });
         localStorage.setItem(LS_KEY, JSON.stringify(next)); return next;
       });
@@ -1213,7 +1271,7 @@ function HistoryPageInner(): React.ReactElement {
               <input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ height: 32, padding: "0 10px", borderRadius: 10, border: "1px solid rgba(180,140,80,0.12)", background: "rgba(0,0,0,0.3)", color: "rgba(232,224,208,0.5)", fontSize: 11, outline: "none" }} />
             </div>
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar…" style={{ height: 32, padding: "0 12px", borderRadius: 999, border: "1px solid rgba(180,140,80,0.12)", background: "rgba(0,0,0,0.3)", color: "rgba(232,224,208,0.5)", fontSize: 11, fontWeight: 600, outline: "none", width: 120 }} />
-            <button onClick={() => { setFOutcome("all"); setFSide("all"); setFWeekday("ALL"); setFContext("all"); setFrom(""); setTo(""); setQ(""); }} style={{ ...pill(), marginLeft: "auto" }}>Clear</button>
+            <button onClick={() => { setFOutcome("all"); setFSide("all"); setFWeekday("ALL"); setFContext("all"); setFSmt("all"); setFrom(""); setTo(""); setQ(""); }} style={{ ...pill(), marginLeft: "auto" }}>Clear</button>
           </div>
           {/* Filtro de categoría */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(180,140,80,0.08)" }}>
@@ -1226,16 +1284,19 @@ function HistoryPageInner(): React.ReactElement {
               { v: "REVERSAL-NO-SWEEP",l: "REVERSAL-NO-SWEEP" },
             ] as { v: ContextFilter; l: string }[]).map(({ v, l }) => {
               const colors: Record<string, "default"|"green"|"amber"|"red"> = {
-                "all": "default",
-                "CONT-AM": "default",
-                "CONT-AM-SWEEP": "green",
-                "REVERSAL-SWEEP": "amber",
-                "REVERSAL-NO-SWEEP": "red",
+                "all": "default", "CONT-AM": "default", "CONT-AM-SWEEP": "green",
+                "REVERSAL-SWEEP": "amber", "REVERSAL-NO-SWEEP": "red",
               };
-              return (
-                <button key={v} onClick={() => setFContext(v)} style={pill(fContext === v, colors[v])}>{l}</button>
-              );
+              return <button key={v} onClick={() => setFContext(v)} style={pill(fContext === v, colors[v])}>{l}</button>;
             })}
+          </div>
+          {/* Filtro SMT */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(180,140,80,0.08)" }}>
+            <span style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.25)", letterSpacing: "0.12em", alignSelf: "center" }}>SMT</span>
+            <button onClick={() => setFSmt("all")} style={pill(fSmt === "all")}>Todos</button>
+            <button onClick={() => setFSmt("smt_structural")} style={pill(fSmt === "smt_structural", "amber")}>Estructural</button>
+            <button onClick={() => setFSmt("smt_entry")} style={pill(fSmt === "smt_entry", "amber")}>Entry</button>
+            <button onClick={() => setFSmt("smt_both")} style={pill(fSmt === "smt_both", "green")}>Ambos</button>
           </div>
         </div>
 
@@ -1416,6 +1477,33 @@ function HistoryPageInner(): React.ReactElement {
                     <button onClick={() => setEditConfirmationCandle("m5")} style={pill(editConfirmationCandle === "m5", "amber")}>M5</button>
                     <button onClick={() => setEditConfirmationCandle("m2")} style={pill(editConfirmationCandle === "m2", "amber")}>M2</button>
                     <button onClick={() => setEditConfirmationCandle("sin-confirmacion")} style={pill(editConfirmationCandle === "sin-confirmacion", "red")}>Sin confirmación</button>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 4, letterSpacing: "0.15em" }}>SMT HTF LIQ. A FAVOR</div>
+                  <div style={{ fontSize: 9, color: "rgba(232,224,208,0.2)", marginBottom: 6 }}>NQ/ES divergen en nivel HTF a favor de mi entrada</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => setEditSmtStructural(null)} style={pill(editSmtStructural === null)}>— Sin info</button>
+                    <button onClick={() => setEditSmtStructural(true)} style={pill(editSmtStructural === true, "green")}>Sí</button>
+                    <button onClick={() => setEditSmtStructural(false)} style={pill(editSmtStructural === false, "red")}>No</button>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 4, letterSpacing: "0.15em" }}>SMT DE ENTRY · M2/M5</div>
+                  <div style={{ fontSize: 9, color: "rgba(232,224,208,0.2)", marginBottom: 6 }}>Manipulación en zona antes de confirmar</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => setEditSmtEntry(null)} style={pill(editSmtEntry === null)}>— Sin info</button>
+                    <button onClick={() => setEditSmtEntry(true)} style={pill(editSmtEntry === true, "green")}>Sí</button>
+                    <button onClick={() => setEditSmtEntry(false)} style={pill(editSmtEntry === false, "red")}>No</button>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.28)", marginBottom: 4, letterSpacing: "0.15em" }}>AMD PREVIO A ENTRY</div>
+                  <div style={{ fontSize: 9, color: "rgba(232,224,208,0.2)", marginBottom: 6 }}>Acumulación / Manipulación antes de entrar</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => setEditAmdPresented(null)} style={pill(editAmdPresented === null)}>— Sin info</button>
+                    <button onClick={() => setEditAmdPresented(true)} style={pill(editAmdPresented === true, "green")}>Sí</button>
+                    <button onClick={() => setEditAmdPresented(false)} style={pill(editAmdPresented === false, "red")}>No</button>
                   </div>
                 </div>
                 <div>
