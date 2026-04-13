@@ -722,48 +722,117 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
     "REVERSAL-NO-SWEEP": { col: "#e08888", bg: "rgba(184,85,85,0.06)",   border: "rgba(184,85,85,0.2)" },
   };
 
+  // Derivar si el trade va a favor o en contra del escenario
+  function isContraEscenario(t: TradeEntry): boolean {
+    const ctx = (t as any);
+    if (!ctx.contextTag) return false;
+    // operable dir: CISD > M15 > AM
+    let opDir: string | null = null;
+    if (ctx.amDir && ctx.amDir !== "sin-dir") opDir = ctx.amDir;
+    if (ctx.m15Struct) opDir = ctx.m15Struct;
+    if (ctx.cisdDir) opDir = ctx.cisdDir;
+    if (!opDir) return false;
+    const sideAlcista = t.tradeSide === "BUY";
+    const dirAlcista = opDir === "alcista";
+    return sideAlcista !== dirAlcista;
+  }
+
   const withTag = trades.filter(t => (t as any).contextTag);
   const noTag = trades.length - withTag.length;
+  const tradesAFavor = withTag.filter(t => !isContraEscenario(t));
+  const tradesContra = withTag.filter(t => isContraEscenario(t));
+
+  function StatCard({ label, group, col, bg, border }: { label: string; group: TradeEntry[]; col: string; bg: string; border: string }) {
+    const w = group.filter(t => outcomeKey(t) === "win");
+    const l = group.filter(t => outcomeKey(t) === "loss");
+    const winRRs = w.map(t => safeRR(t)).filter((v): v is number => v !== null);
+    const netRR = winRRs.reduce((a, b) => a + b, 0) - l.length;
+    const wr = w.length + l.length > 0 ? w.length / (w.length + l.length) * 100 : 0;
+    if (group.length === 0) return (
+      <div style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${border}`, background: bg, opacity: 0.4 }}>
+        <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: col, marginBottom: 8 }}>{label}</div>
+        <div style={{ fontSize: 13, color: "rgba(232,224,208,0.3)" }}>Sin datos</div>
+      </div>
+    );
+    return (
+      <div style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${border}`, background: bg }}>
+        <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: col, marginBottom: 8 }}>{label}</div>
+        <div style={{ fontSize: 20, fontWeight: 900, color: "rgba(232,224,208,0.9)", marginBottom: 4 }}>{wr.toFixed(0)}%</div>
+        <div style={{ fontSize: 10, color: "rgba(232,224,208,0.35)", marginBottom: 2 }}>{w.length}W · {l.length}L · {group.length - w.length - l.length}BE</div>
+        <div style={{ fontSize: 11, fontWeight: 800, color: netRR >= 0 ? "#7dcb9a" : "#e08888" }}>{netRR >= 0 ? "+" : ""}{netRR.toFixed(1)}R net</div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ marginTop: 16 }}>
-      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.18em", color: "rgba(232,224,208,0.28)", marginBottom: 12 }}>
-        RENDIMIENTO POR CATEGORÍA DE TRADE
-      </div>
 
       {noTag > 0 && (
         <div style={{ fontSize: 11, color: "rgba(232,224,208,0.28)", marginBottom: 12 }}>
-          {noTag} trade{noTag !== 1 ? "s" : ""} sin categoría aún — editálos desde el ✎ para completar el contexto.
+          {noTag} trade{noTag !== 1 ? "s" : ""} sin categoría — editálos desde ✎ para completar el contexto.
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(155px,1fr))", gap: 8, marginBottom: 12 }}>
+      {/* A favor del escenario */}
+      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.18em", color: "rgba(232,224,208,0.28)", marginBottom: 8 }}>
+        TRADES A FAVOR DEL ESCENARIO
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(155px,1fr))", gap: 8, marginBottom: 16 }}>
         {tags.map(tag => {
-          const g = trades.filter(t => (t as any).contextTag === tag);
-          const w = g.filter(t => outcomeKey(t) === "win");
-          const l = g.filter(t => outcomeKey(t) === "loss");
-          const winRRs = w.map(t => safeRR(t)).filter((v): v is number => v !== null);
-          const netRR = winRRs.reduce((a, b) => a + b, 0) - l.length;
-          const wr = w.length + l.length > 0 ? w.length / (w.length + l.length) * 100 : 0;
+          const g = tradesAFavor.filter(t => (t as any).contextTag === tag);
           const { col, bg, border } = tagColors[tag];
-
-          if (g.length === 0) return (
-            <div key={tag} style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${border}`, background: bg, opacity: 0.4 }}>
-              <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: col, marginBottom: 8 }}>{tag}</div>
-              <div style={{ fontSize: 13, color: "rgba(232,224,208,0.3)" }}>Sin datos</div>
-            </div>
-          );
-
-          return (
-            <div key={tag} style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${border}`, background: bg }}>
-              <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: col, marginBottom: 8 }}>{tag}</div>
-              <div style={{ fontSize: 20, fontWeight: 900, color: "rgba(232,224,208,0.9)", marginBottom: 4 }}>{wr.toFixed(0)}%</div>
-              <div style={{ fontSize: 10, color: "rgba(232,224,208,0.35)", marginBottom: 2 }}>{w.length}W · {l.length}L · {g.length - w.length - l.length}BE</div>
-              <div style={{ fontSize: 11, fontWeight: 800, color: netRR >= 0 ? "#7dcb9a" : "#e08888" }}>{netRR >= 0 ? "+" : ""}{netRR.toFixed(1)}R net</div>
-            </div>
-          );
+          return <StatCard key={tag} label={tag} group={g} col={col} bg={bg} border={border} />;
         })}
       </div>
+
+      {/* Contra el escenario */}
+      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.18em", color: "rgba(184,85,85,0.5)", marginBottom: 8 }}>
+        TRADES CONTRA EL ESCENARIO
+      </div>
+      {tradesContra.length === 0 ? (
+        <div style={{ padding: "12px 16px", borderRadius: 12, border: "1px solid rgba(184,85,85,0.15)", background: "rgba(184,85,85,0.03)", fontSize: 12, color: "rgba(232,224,208,0.3)", marginBottom: 16 }}>
+          Sin trades contra el escenario registrados.
+        </div>
+      ) : (
+        <div style={{ marginBottom: 16 }}>
+          {/* Resumen general */}
+          {(() => {
+            const w = tradesContra.filter(t => outcomeKey(t) === "win");
+            const l = tradesContra.filter(t => outcomeKey(t) === "loss");
+            const wr = w.length + l.length > 0 ? w.length / (w.length + l.length) * 100 : 0;
+            const netRR = w.map(t => safeRR(t)).filter((v): v is number => v !== null).reduce((a, b) => a + b, 0) - l.length;
+            return (
+              <div style={{ padding: "12px 16px", borderRadius: 12, border: "1px solid rgba(184,85,85,0.3)", background: "rgba(184,85,85,0.06)", marginBottom: 8, display: "flex", gap: 20, flexWrap: "wrap", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(224,136,136,0.5)", marginBottom: 2 }}>TOTAL CONTRA ESCENARIO</div>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: "#e08888" }}>{tradesContra.length} trades</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(224,136,136,0.5)", marginBottom: 2 }}>WINRATE</div>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: wr >= 50 ? "#c8923a" : "#e08888" }}>{wr.toFixed(0)}%</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(224,136,136,0.5)", marginBottom: 2 }}>NET RR</div>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: netRR >= 0 ? "#7dcb9a" : "#e08888" }}>{netRR >= 0 ? "+" : ""}{netRR.toFixed(1)}R</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(224,136,136,0.5)", marginBottom: 2 }}>DESGLOSE</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "rgba(232,224,208,0.5)" }}>{w.length}W · {l.length}L · {tradesContra.length - w.length - l.length}BE</div>
+                </div>
+              </div>
+            );
+          })()}
+          {/* Por categoría */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(155px,1fr))", gap: 8 }}>
+            {tags.map(tag => {
+              const g = tradesContra.filter(t => (t as any).contextTag === tag);
+              if (g.length === 0) return null;
+              const { col, bg, border } = tagColors[tag];
+              return <StatCard key={tag} label={tag} group={g} col={col} bg={bg} border={border} />;
+            })}
+          </div>
+        </div>
+      )}
 
       {/* BUY vs SELL */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
