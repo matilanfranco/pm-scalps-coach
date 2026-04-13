@@ -173,6 +173,7 @@ export default function Page() {
   const [smtStructural, setSmtStructural] = useState<boolean|null>(null);
   const [smtEntry, setSmtEntry] = useState<boolean|null>(null);
   const [amdPresented, setAmdPresented] = useState<boolean|null>(null);
+  const [stopAlert, setStopAlert] = useState<{ contextTag: string | null; tradeSide: TradeSide } | null>(null);
   const [confirmationCandle, setConfirmationCandle] = useState<ConfirmationCandle>(null);
 
   // ── Pre-trade state — nuevo sistema 3 secciones ─
@@ -306,6 +307,10 @@ export default function Page() {
       });
       setLastSavedTradeId(tradeId);
       await uploadChart({ tradeId });
+      // Mostrar alerta si fue STOP
+      if (outcome === "STOP") {
+        setStopAlert({ contextTag: contextResult.contextTag, tradeSide });
+      }
       resetJournalForm();
       setTrades((await listTrades(userId, 200)) as any);
     } catch (err) { console.error(err); }
@@ -323,6 +328,25 @@ export default function Page() {
     setDailySaved(next);
   }
 
+  // ── Stop Alert messages ──────────────────────────
+  const STOP_MESSAGES: Record<string, string> = {
+    "CONT-AM-BUY":           "Antes de continuar, respirá y reanalizá en M5/M15. Los contextos alcistas que no paran de subir son los que más nervioso te ponen — y donde encontrás zonas en cualquier lado. ¿El precio retrocedió a una zona real o estás entrando extendido? Ojo con vender sin ruptura clara en M15. Calma, el trade va a estar, y si no aparece, siempre es buen momento para ser expectador y no dejar dinero en errores.",
+    "CONT-AM-SELL":          "Antes de continuar, reanalizá en M5/M15. ¿Quedan objetivos de liquidez abajo? Si ya tomó PDL, London L y Asia L, la AM cumplió. Vender ahora es apostar a que sigue — no a que entregue. ¿Tenés target lógico claro? Ojo con irse sin ruptura limpia en M15.",
+    "CONT-AM-SWEEP-BUY":     "Antes de continuar, reanalizá en M5/M15. Este es tu mejor escenario — sweep en apertura + AM alcista + aceptación. Los trades ganadores acá tienen: CISD M15, zona de PD Array clara, y SMT. Ese combo te da más del 70%. Sin SMT, bajás del 50%. ¿Tenés las tres confluencias o estás forzando?",
+    "CONT-AM-SWEEP-SELL":    "Antes de continuar, reanalizá en M5/M15. Buena estructura — pero el error típico acá es entrar en el primer retroceso sin que el precio limpie liquidez interna. ¿Está en zona premium real? ¿Hay SMT confirmando la dirección? Sin SMT este escenario pierde potencial. No apures la entrada.",
+    "REVERSAL-SWEEP-BUY":    "Antes de continuar, reanalizá en M5/M15. Sweep bajista + reversión — potencial alto, pero el error más común tuyo acá es CISD en M5 en lugar de M15. Si no hay estructura rota en M15, el precio sigue siendo bajista y estás comprando contra la entrega. ¿Tenés CISD M15 limpio y zona clara?",
+    "REVERSAL-SWEEP-SELL":   "Antes de continuar, reanalizá en M5/M15. Sweep alcista + reversión. El error tuyo documentado: señal solo en M2 sin confirmación real. M2 no alcanza. ¿Hay CISD M15 limpio? Ahora buscá SMT de entry en la zona — sin él tu efectividad en reversals baja drásticamente. Ese SMT es la firma.",
+    "REVERSAL-NO-SWEEP-BUY": "Antes de continuar, reanalizá en M5/M15. Sin sweep que potencie el reversal, necesitás más confluencias que en cualquier otro escenario. ¿El precio hizo AMD completo? ¿Hay FVG limpio de compras en M15 sin invalidar? ¿SMT de entry en zona? Si dudás en alguna de las tres, este no es el trade.",
+    "REVERSAL-NO-SWEEP-SELL":"Antes de continuar, reanalizá en M5/M15. Sin sweep, el precio puede seguir acumulando antes de caer — podés estar vendiendo en el medio del rango. ¿Ya hizo AMD completo? Ojo con FVG de compras activos arriba. Buscá manipulaciones, SMT de entry, y CISD M15 antes de ejecutar. Si no está todo, esperá.",
+    "DEFAULT":               "Antes de continuar, respirá. Reanalizá en M5/M15 desde cero. ¿El próximo trade tiene todas las confluencias o estás buscando recuperar? Tu edge está probado — solo funciona cuando lo respetás.",
+  };
+
+  function getStopMessage(tag: string | null, side: TradeSide): string {
+    if (!tag) return STOP_MESSAGES["DEFAULT"];
+    const key = `${tag}-${side}`;
+    return STOP_MESSAGES[key] ?? STOP_MESSAGES["DEFAULT"];
+  }
+
   if (!sessionReady || !userId) {
     return <div style={{ minHeight:"100vh", background:"#0c0a07", display:"flex", alignItems:"center", justifyContent:"center", color:"rgba(232,224,208,0.3)", fontSize:13 }}>Cargando…</div>;
   }
@@ -331,6 +355,48 @@ export default function Page() {
     <>
       <div style={{ position:"fixed", inset:0, zIndex:0, backgroundImage:"url('/PM_SCALPS_BG.png')", backgroundSize:"cover", backgroundPosition:"center" }} />
       <div style={{ position:"fixed", inset:0, zIndex:1, background:"rgba(6,4,2,0.70)", backgroundImage:"radial-gradient(ellipse 100% 45% at 50% 0%, rgba(150,90,20,0.28) 0%, transparent 60%)" }} />
+
+      {/* ── Stop Alert Modal ── */}
+      {stopAlert && (
+        <div style={{ position:"fixed", inset:0, zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(4,3,1,0.92)", backdropFilter:"blur(16px)", padding:20 }}>
+          <div style={{ maxWidth:480, width:"100%", position:"relative" }}>
+            <div style={{ position:"absolute", inset:0, borderRadius:24, background:"radial-gradient(ellipse 80% 60% at 50% 0%, rgba(184,85,85,0.35) 0%, transparent 70%)", pointerEvents:"none" }} />
+            <div style={{ position:"relative", borderRadius:24, border:"1px solid rgba(184,85,85,0.4)", background:"rgba(10,6,4,0.95)", padding:"32px 28px" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20 }}>
+                <div style={{ width:40, height:40, borderRadius:999, background:"rgba(184,85,85,0.15)", border:"1px solid rgba(184,85,85,0.4)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:20, flexShrink:0 }}>⚠️</div>
+                <div>
+                  <div style={{ fontSize:10, fontWeight:800, letterSpacing:"0.22em", color:"rgba(224,136,136,0.6)" }}>STOP LOSS REGISTRADO</div>
+                  <div style={{ fontSize:16, fontWeight:900, color:"#e08888", marginTop:2 }}>
+                    {stopAlert.contextTag ?? "SIN CATEGORÍA"} · {stopAlert.tradeSide}
+                  </div>
+                </div>
+              </div>
+              <div style={{ height:1, background:"rgba(184,85,85,0.2)", marginBottom:20 }} />
+              <div style={{ fontSize:13, color:"rgba(232,224,208,0.82)", lineHeight:1.8, fontWeight:500 }}>
+                {getStopMessage(stopAlert.contextTag, stopAlert.tradeSide).split('. ').map((sentence, i, arr) => {
+                  const isQuestion = sentence.trim().startsWith('¿');
+                  const isWarning = sentence.toLowerCase().includes('ojo') || sentence.toLowerCase().includes('sin smt') || sentence.toLowerCase().includes('error');
+                  return (
+                    <span key={i} style={{ color: isQuestion ? "#e08888" : isWarning ? "#c8923a" : "rgba(232,224,208,0.82)" }}>
+                      {sentence}{i < arr.length - 1 ? '. ' : ''}
+                    </span>
+                  );
+                })}
+              </div>
+              <div style={{ height:1, background:"rgba(184,85,85,0.15)", margin:"24px 0 20px" }} />
+              <div style={{ fontSize:11, fontWeight:800, color:"rgba(232,224,208,0.4)", marginBottom:14, letterSpacing:"0.1em" }}>¿SEGUÍS OPERANDO?</div>
+              <div style={{ display:"flex", gap:10 }}>
+                <button onClick={() => setStopAlert(null)} style={{ flex:1, height:44, borderRadius:999, cursor:"pointer", border:"1px solid rgba(74,158,106,0.4)", background:"rgba(74,158,106,0.09)", color:"#7dcb9a", fontSize:12, fontWeight:800 }}>
+                  Sí — tengo un setup válido
+                </button>
+                <button onClick={() => setStopAlert(null)} style={{ flex:1, height:44, borderRadius:999, cursor:"pointer", border:"1px solid rgba(184,85,85,0.3)", background:"rgba(184,85,85,0.08)", color:"#e08888", fontSize:12, fontWeight:800 }}>
+                  No — cerrar por hoy
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Welcome */}
       {showWelcome && (
@@ -459,7 +525,7 @@ export default function Page() {
               </div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:16, alignItems:"flex-start" }}>
                 <div>
-                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:4 }}>SMT HTF LIQ. + CISD m15</div>
+                  <div style={{ fontSize:10, fontWeight:800, color:"rgba(232,224,208,0.28)", marginBottom:4 }}>SMT HTF LIQ. A FAVOR</div>
                   <div style={{ fontSize:9, color:"rgba(232,224,208,0.2)", marginBottom:6 }}>NQ/ES divergen en nivel HTF a favor de mi entrada</div>
                   <div style={{ display:"flex", gap:6 }}>
                     <Btn active={smtStructural === true} variant="green" onClick={() => setSmtStructural(smtStructural === true ? null : true)}>Sí</Btn>
