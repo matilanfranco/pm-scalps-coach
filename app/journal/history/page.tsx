@@ -837,12 +837,13 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
       {/* SMT Stats */}
       <div style={{ marginTop: 16 }}>
         <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.15em", color: "rgba(232,224,208,0.28)", marginBottom: 8 }}>CONFLUENCIA SMT</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px,1fr))", gap: 8 }}>
           {([
-            { key: "smt_structural", label: "SMT HTF Liq. + CISD m15 a favor", desc: "NQ/ES en nivel HTF a favor de entrada", fn: (t: TradeEntry) => !!(t as any).smtStructural },
+            { key: "smt_structural", label: "SMT HTF Liq. a favor", desc: "NQ/ES en nivel HTF a favor de entrada", fn: (t: TradeEntry) => !!(t as any).smtStructural },
             { key: "smt_entry",      label: "SMT Entry",       desc: "M2/M5 · manipulación zona", fn: (t: TradeEntry) => !!(t as any).smtEntry },
             { key: "smt_both",       label: "SMT Ambos",       desc: "Estructural + Entry", fn: (t: TradeEntry) => !!(t as any).smtStructural && !!(t as any).smtEntry },
             { key: "amd",             label: "AMD Previo",       desc: "AMD antes de entry",  fn: (t: TradeEntry) => !!(t as any).amdPresented },
+            { key: "no_smt",          label: "Sin SMT",          desc: "Sin estructural ni entry", fn: (t: TradeEntry) => (t as any).smtStructural === false && (t as any).smtEntry === false },
           ]).map(({ key, label, desc, fn }) => {
             const g = trades.filter(fn);
             const w = g.filter(t => outcomeKey(t) === "win").length;
