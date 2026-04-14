@@ -742,24 +742,80 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
   const tradesAFavor = withTag.filter(t => !isContraEscenario(t));
   const tradesContra = withTag.filter(t => isContraEscenario(t));
 
-  function StatCard({ label, group, col, bg, border }: { label: string; group: TradeEntry[]; col: string; bg: string; border: string }) {
+  function miniStats(group: TradeEntry[]) {
     const w = group.filter(t => outcomeKey(t) === "win");
     const l = group.filter(t => outcomeKey(t) === "loss");
-    const winRRs = w.map(t => safeRR(t)).filter((v): v is number => v !== null);
-    const netRR = winRRs.reduce((a, b) => a + b, 0) - l.length;
     const wr = w.length + l.length > 0 ? w.length / (w.length + l.length) * 100 : 0;
+    const netRR = w.map(t => safeRR(t)).filter((v): v is number => v !== null).reduce((a, b) => a + b, 0) - l.length;
+    return { w: w.length, l: l.length, be: group.length - w.length - l.length, wr, netRR, total: group.length };
+  }
+
+  function StatCard({ label, group, col, bg, border }: { label: string; group: TradeEntry[]; col: string; bg: string; border: string }) {
+    const total = miniStats(group);
+    const alc = miniStats(group.filter(t => {
+      const ctx = t as any;
+      let opDir: string | null = ctx.amDir ?? null;
+      if (ctx.m15Struct) opDir = ctx.m15Struct;
+      if (ctx.cisdDir) opDir = ctx.cisdDir;
+      return opDir === "alcista";
+    }));
+    const baj = miniStats(group.filter(t => {
+      const ctx = t as any;
+      let opDir: string | null = ctx.amDir ?? null;
+      if (ctx.m15Struct) opDir = ctx.m15Struct;
+      if (ctx.cisdDir) opDir = ctx.cisdDir;
+      return opDir === "bajista";
+    }));
+
     if (group.length === 0) return (
-      <div style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${border}`, background: bg, opacity: 0.4 }}>
+      <div style={{ padding: "16px 18px", borderRadius: 14, border: `1px solid ${border}`, background: bg, opacity: 0.4 }}>
         <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: col, marginBottom: 8 }}>{label}</div>
         <div style={{ fontSize: 13, color: "rgba(232,224,208,0.3)" }}>Sin datos</div>
       </div>
     );
+
     return (
-      <div style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${border}`, background: bg }}>
-        <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: col, marginBottom: 8 }}>{label}</div>
-        <div style={{ fontSize: 20, fontWeight: 900, color: "rgba(232,224,208,0.9)", marginBottom: 4 }}>{wr.toFixed(0)}%</div>
-        <div style={{ fontSize: 10, color: "rgba(232,224,208,0.35)", marginBottom: 2 }}>{w.length}W · {l.length}L · {group.length - w.length - l.length}BE</div>
-        <div style={{ fontSize: 11, fontWeight: 800, color: netRR >= 0 ? "#7dcb9a" : "#e08888" }}>{netRR >= 0 ? "+" : ""}{netRR.toFixed(1)}R net</div>
+      <div style={{ padding: "16px 18px", borderRadius: 14, border: `1px solid ${border}`, background: bg }}>
+        {/* Label */}
+        <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: col, marginBottom: 10 }}>{label}</div>
+
+        {/* Total */}
+        <div style={{ fontSize: 26, fontWeight: 900, color: "rgba(232,224,208,0.95)", lineHeight: 1 }}>{total.wr.toFixed(0)}%</div>
+        <div style={{ fontSize: 10, color: "rgba(232,224,208,0.35)", marginTop: 4 }}>{total.w}W · {total.l}L · {total.be}BE</div>
+        <div style={{ fontSize: 12, fontWeight: 800, color: total.netRR >= 0 ? "#7dcb9a" : "#e08888", marginTop: 3, marginBottom: 14 }}>{total.netRR >= 0 ? "+" : ""}{total.netRR.toFixed(1)}R net</div>
+
+        {/* Divider */}
+        <div style={{ height: 1, background: "rgba(180,140,80,0.1)", marginBottom: 12 }} />
+
+        {/* Alcista vs Bajista */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          {/* Alcista */}
+          <div style={{ padding: "8px 10px", borderRadius: 10, background: "rgba(74,158,106,0.07)", border: "1px solid rgba(74,158,106,0.18)" }}>
+            <div style={{ fontSize: 8, fontWeight: 800, color: "rgba(125,203,154,0.6)", letterSpacing: "0.1em", marginBottom: 4 }}>▲ ALCISTA</div>
+            {alc.total === 0 ? (
+              <div style={{ fontSize: 10, color: "rgba(232,224,208,0.25)" }}>—</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 16, fontWeight: 900, color: "#7dcb9a" }}>{alc.wr.toFixed(0)}%</div>
+                <div style={{ fontSize: 9, color: "rgba(232,224,208,0.35)", marginTop: 2 }}>{alc.w}W · {alc.l}L</div>
+                <div style={{ fontSize: 10, fontWeight: 800, color: alc.netRR >= 0 ? "#7dcb9a" : "#e08888", marginTop: 2 }}>{alc.netRR >= 0 ? "+" : ""}{alc.netRR.toFixed(1)}R</div>
+              </>
+            )}
+          </div>
+          {/* Bajista */}
+          <div style={{ padding: "8px 10px", borderRadius: 10, background: "rgba(184,85,85,0.07)", border: "1px solid rgba(184,85,85,0.18)" }}>
+            <div style={{ fontSize: 8, fontWeight: 800, color: "rgba(224,136,136,0.6)", letterSpacing: "0.1em", marginBottom: 4 }}>▼ BAJISTA</div>
+            {baj.total === 0 ? (
+              <div style={{ fontSize: 10, color: "rgba(232,224,208,0.25)" }}>—</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 16, fontWeight: 900, color: "#e08888" }}>{baj.wr.toFixed(0)}%</div>
+                <div style={{ fontSize: 9, color: "rgba(232,224,208,0.35)", marginTop: 2 }}>{baj.w}W · {baj.l}L</div>
+                <div style={{ fontSize: 10, fontWeight: 800, color: baj.netRR >= 0 ? "#7dcb9a" : "#e08888", marginTop: 2 }}>{baj.netRR >= 0 ? "+" : ""}{baj.netRR.toFixed(1)}R</div>
+              </>
+            )}
+          </div>
+        </div>
       </div>
     );
   }
@@ -777,7 +833,7 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
       <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.18em", color: "rgba(232,224,208,0.28)", marginBottom: 8 }}>
         TRADES A FAVOR DEL ESCENARIO
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(155px,1fr))", gap: 8, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 10, marginBottom: 16 }}>
         {tags.map(tag => {
           const g = tradesAFavor.filter(t => (t as any).contextTag === tag);
           const { col, bg, border } = tagColors[tag];
@@ -793,6 +849,7 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
         <div style={{ padding: "12px 16px", borderRadius: 12, border: "1px solid rgba(184,85,85,0.15)", background: "rgba(184,85,85,0.03)", fontSize: 12, color: "rgba(232,224,208,0.3)", marginBottom: 16 }}>
           Sin trades contra el escenario registrados.
         </div>
+
       ) : (
         <div style={{ marginBottom: 16 }}>
           {/* Resumen general */}
