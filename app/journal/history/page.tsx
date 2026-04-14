@@ -857,6 +857,35 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
         })}
       </div>
 
+      {/* NQ vs ES */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+        {(["NQ", "ES"] as const).map(instr => {
+          const g = trades.filter(t => t.instrument === instr);
+          const w = g.filter(t => outcomeKey(t) === "win");
+          const l = g.filter(t => outcomeKey(t) === "loss");
+          const wr = w.length + l.length > 0 ? w.length / (w.length + l.length) * 100 : 0;
+          const winRRs = w.map(t => safeRR(t)).filter((v): v is number => v !== null);
+          const netRR = winRRs.reduce((a, b) => a + b, 0) - l.length;
+          const col = instr === "NQ" ? "#c8923a" : "#85b0e0";
+          const bg = instr === "NQ" ? "rgba(200,146,58,0.06)" : "rgba(74,126,184,0.06)";
+          const border = instr === "NQ" ? "rgba(200,146,58,0.2)" : "rgba(74,126,184,0.2)";
+          return (
+            <div key={instr} style={{ padding: "12px 14px", borderRadius: 12, border: `1px solid ${border}`, background: bg }}>
+              <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: col, marginBottom: 6 }}>{instr}</div>
+              {g.length === 0 ? (
+                <div style={{ fontSize: 12, color: "rgba(232,224,208,0.25)" }}>Sin datos</div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 18, fontWeight: 900, color: "rgba(232,224,208,0.9)" }}>{wr.toFixed(0)}%</div>
+                  <div style={{ fontSize: 10, color: "rgba(232,224,208,0.35)", marginTop: 2 }}>{w.length}W · {l.length}L · {g.length - w.length - l.length}BE</div>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: netRR >= 0 ? "#7dcb9a" : "#e08888", marginTop: 2 }}>{netRR >= 0 ? "+" : ""}{netRR.toFixed(1)}R</div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
       {/* Horario */}
       <div style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.15em", color: "rgba(232,224,208,0.28)", marginBottom: 8 }}>POR HORARIO</div>
