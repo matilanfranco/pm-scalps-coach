@@ -66,12 +66,50 @@ function useIsMobile(bp = 768) {
 }
 
 function toCSV(trades: TradeEntry[], name: string) {
-  const hdr = ["id","date","time","instrument","side","outcome","rr","plan","setup","note"];
-  const rows = trades.map(t => [
-    t.id, formatYMD(t.createdAt), t.tradeTime, t.instrument, t.tradeSide,
-    outcomeKey(t), t.rr, t.followedPlan, t.setupTag,
-    (t.note || "").replace(/"/g, '""'),
-  ].map(v => `"${v ?? ""}"`).join(","));
+  const hdr = [
+    "id","date","time","instrument","side","outcome","rr","plan","setup",
+    // Contexto de sesión
+    "context_tag","htf_aligned","htf_struct",
+    "am_dir","am_sweep_nivel","am_reac",
+    "pm_sweep_nivel","pm_reac",
+    "m15_struct","cisd_dir",
+    // Confluencias
+    "smt_structural","smt_entry","amd_presented","confirmation_candle",
+    // Nota
+    "note",
+  ];
+  const rows = trades.map(t => {
+    const ctx = t as any;
+    return [
+      t.id,
+      formatYMD(t.createdAt),
+      t.tradeTime,
+      t.instrument,
+      t.tradeSide,
+      outcomeKey(t),
+      t.rr,
+      t.followedPlan,
+      t.setupTag,
+      // Contexto
+      ctx.contextTag ?? "",
+      ctx.htfAligned === true ? "si" : ctx.htfAligned === false ? "no" : "",
+      ctx.htfStruct ?? "",
+      ctx.amDir ?? "",
+      ctx.amSweepNivel ?? "",
+      ctx.amReac ?? "",
+      ctx.pmSweepNivel ?? "",
+      ctx.pmReac ?? "",
+      ctx.m15Struct ?? "",
+      ctx.cisdDir ?? "",
+      // Confluencias
+      ctx.smtStructural === true ? "si" : ctx.smtStructural === false ? "no" : "",
+      ctx.smtEntry === true ? "si" : ctx.smtEntry === false ? "no" : "",
+      ctx.amdPresented === true ? "si" : ctx.amdPresented === false ? "no" : "",
+      ctx.confirmationCandle ?? "",
+      // Nota
+      (t.note || "").replace(/"/g, '""'),
+    ].map(v => `"${v ?? ""}"`).join(",");
+  });
   const blob = new Blob([[hdr.join(","), ...rows].join("\n")], { type: "text/csv" });
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click();
 }
@@ -987,6 +1025,84 @@ function MarketStateStats({ trades }: { trades: TradeEntry[] }): React.ReactElem
             );
           })}
         </div>
+      </div>
+
+      {/* HTF Direction Stats */}
+      <div style={{ marginTop: 16, marginBottom: 16 }}>
+        <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.15em", color: "rgba(232,224,208,0.28)", marginBottom: 10 }}>ALINEACIÓN HTF H1/H4</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+          {([
+            {
+              label: "A FAVOR",
+              desc: "HTF alineado con tu entrada",
+              fn: (t: TradeEntry) => (t as any).htfAligned === true,
+              col: "#7dcb9a", bg: "rgba(74,158,106,0.06)", border: "rgba(74,158,106,0.22)",
+            },
+            {
+              label: "EN CONTRA",
+              desc: "HTF opuesto a tu entrada",
+              fn: (t: TradeEntry) => (t as any).htfAligned === false,
+              col: "#e08888", bg: "rgba(184,85,85,0.06)", border: "rgba(184,85,85,0.22)",
+            },
+            {
+              label: "SIN DATO",
+              desc: "HTF no registrado",
+              fn: (t: TradeEntry) => (t as any).htfAligned === null || (t as any).htfAligned === undefined,
+              col: "rgba(232,224,208,0.3)", bg: "rgba(255,255,255,0.02)", border: "rgba(180,140,80,0.1)",
+            },
+          ]).map(({ label, desc, fn, col, bg, border }) => {
+            const g = trades.filter(fn);
+            const w = g.filter(t => outcomeKey(t) === "win");
+            const l = g.filter(t => outcomeKey(t) === "loss");
+            const be = g.filter(t => outcomeKey(t) === "be");
+            const wr = w.length + l.length > 0 ? w.length / (w.length + l.length) * 100 : 0;
+            const netRR = w.map(t => safeRR(t)).filter((v): v is number => v !== null).reduce((a, b) => a + b, 0) - l.length;
+            const wrCol = wr >= 55 ? "#7dcb9a" : wr <= 40 ? "#e08888" : "#c8923a";
+            return (
+              <div key={label} style={{ padding: "14px 16px", borderRadius: 12, border: `1px solid ${border}`, background: bg }}>
+                <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.12em", color: col, marginBottom: 2 }}>{label}</div>
+                <div style={{ fontSize: 9, color: "rgba(232,224,208,0.25)", marginBottom: 10 }}>{desc}</div>
+                {g.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "rgba(232,224,208,0.25)" }}>Sin datos</div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 22, fontWeight: 900, color: wrCol, lineHeight: 1 }}>{wr.toFixed(0)}%</div>
+                    <div style={{ fontSize: 10, color: "rgba(232,224,208,0.35)", marginTop: 4 }}>{w.length}W · {l.length}L · {be.length}BE</div>
+                    <div style={{ fontSize: 10, color: "rgba(232,224,208,0.28)", marginTop: 2 }}>{g.length} trades</div>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: netRR >= 0 ? "#7dcb9a" : "#e08888", marginTop: 4 }}>{netRR >= 0 ? "+" : ""}{netRR.toFixed(1)}R net</div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Comparación visual */}
+        {(() => {
+          const favor = trades.filter(t => (t as any).htfAligned === true);
+          const contra = trades.filter(t => (t as any).htfAligned === false);
+          if (favor.length === 0 || contra.length === 0) return null;
+          const wFavor = favor.filter(t => outcomeKey(t) === "win").length;
+          const lFavor = favor.filter(t => outcomeKey(t) === "loss").length;
+          const wContra = contra.filter(t => outcomeKey(t) === "win").length;
+          const lContra = contra.filter(t => outcomeKey(t) === "loss").length;
+          const wrFavor = wFavor + lFavor > 0 ? wFavor / (wFavor + lFavor) * 100 : 0;
+          const wrContra = wContra + lContra > 0 ? wContra / (wContra + lContra) * 100 : 0;
+          const diff = wrFavor - wrContra;
+          return (
+            <div style={{ marginTop: 10, padding: "12px 16px", borderRadius: 12, border: "1px solid rgba(180,140,80,0.12)", background: "rgba(0,0,0,0.15)", display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ fontSize: 11, color: "rgba(232,224,208,0.4)", fontWeight: 600, flex: 1 }}>
+                Cuando el HTF está a favor ganás
+              </div>
+              <div style={{ fontSize: 16, fontWeight: 900, color: diff > 0 ? "#7dcb9a" : "#e08888" }}>
+                {diff > 0 ? "+" : ""}{diff.toFixed(0)}%
+              </div>
+              <div style={{ fontSize: 11, color: "rgba(232,224,208,0.3)", fontWeight: 700 }}>
+                más que en contra
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* SMT Stats */}
