@@ -17,6 +17,7 @@ type Weekday = "ALL" | "Lunes" | "Martes" | "Miércoles" | "Jueves" | "Viernes";
 type ChartMode = "none" | "weekly" | "equity" | "marketstate" | "ai";
 type ContextFilter = "all" | "CONT-AM" | "CONT-AM-SWEEP" | "REVERSAL-SWEEP" | "REVERSAL-NO-SWEEP";
 type SmtFilter = "all" | "smt_structural" | "smt_entry" | "smt_both";
+type SetupFilter = "all" | "A" | "B";
 
 type SavedAnalysis = {
   id: string;
@@ -121,12 +122,14 @@ const card: React.CSSProperties = {
   backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)",
 };
 
-function pill(active = false, variant: "default" | "green" | "red" | "amber" = "default"): React.CSSProperties {
+function pill(active = false, variant: "default" | "green" | "red" | "amber" | "sky" | "violet" = "default"): React.CSSProperties {
   const c = {
-    default: { b: "rgba(180,140,80,0.35)", bg: "rgba(200,146,58,0.08)", t: "#c8923a" },
-    green:   { b: "rgba(74,158,106,0.5)",  bg: "rgba(74,158,106,0.12)", t: "#7dcb9a" },
-    red:     { b: "rgba(184,85,85,0.5)",   bg: "rgba(184,85,85,0.12)", t: "#e08888" },
-    amber:   { b: "rgba(200,146,58,0.5)",  bg: "rgba(200,146,58,0.1)", t: "#c8923a" },
+    default: { b: "rgba(180,140,80,0.35)",  bg: "rgba(200,146,58,0.08)",  t: "#c8923a" },
+    green:   { b: "rgba(74,158,106,0.5)",   bg: "rgba(74,158,106,0.12)",  t: "#7dcb9a" },
+    red:     { b: "rgba(184,85,85,0.5)",    bg: "rgba(184,85,85,0.12)",   t: "#e08888" },
+    amber:   { b: "rgba(200,146,58,0.5)",   bg: "rgba(200,146,58,0.1)",   t: "#c8923a" },
+    sky:     { b: "rgba(100,180,230,0.5)",  bg: "rgba(100,180,230,0.12)", t: "#85cef0" },
+    violet:  { b: "rgba(160,120,220,0.5)",  bg: "rgba(160,120,220,0.12)", t: "#c0a0f0" },
   }[variant];
   return {
     height: 32, padding: "0 14px", borderRadius: 999, cursor: "pointer",
@@ -1218,6 +1221,7 @@ function HistoryPageInner(): React.ReactElement {
   const [fWeekday, setFWeekday] = useState<Weekday>((searchParams?.get("day") as Weekday) || "ALL");
   const [fContext, setFContext] = useState<ContextFilter>((searchParams?.get("ctx") as ContextFilter) || "all");
   const [fSmt, setFSmt] = useState<SmtFilter>((searchParams?.get("smt") as SmtFilter) || "all");
+  const [fSetup, setFSetup] = useState<SetupFilter>((searchParams?.get("setup") as SetupFilter) || "all");
   const [from, setFrom] = useState(searchParams?.get("from") || "");
   const [to, setTo] = useState(searchParams?.get("to") || "");
   const [q, setQ] = useState(searchParams?.get("q") || "");
@@ -1243,15 +1247,16 @@ function HistoryPageInner(): React.ReactElement {
     if (fWeekday !== "ALL") params.set("day", fWeekday);
     if (fContext !== "all") params.set("ctx", fContext);
     if (fSmt !== "all") params.set("smt", fSmt);
+    if (fSetup !== "all") params.set("setup", fSetup);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
     if (q) params.set("q", q);
     if (page > 1) params.set("p", String(page));
     const qs = params.toString();
     window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
-  }, [fOutcome, fSide, fWeekday, fContext, fSmt, from, to, q, page, pathname]);
+  }, [fOutcome, fSide, fWeekday, fContext, fSmt, fSetup, from, to, q, page, pathname]);
 
-  useEffect(() => { updateUrl(); }, [fOutcome, fSide, fWeekday, fContext, fSmt, from, to, q, page]);
+  useEffect(() => { updateUrl(); }, [fOutcome, fSide, fWeekday, fContext, fSmt, fSetup, from, to, q, page]);
 
   const [editTrade, setEditTrade] = useState<TradeEntry | null>(null);
   const [editDate, setEditDate] = useState("");
@@ -1315,16 +1320,17 @@ function HistoryPageInner(): React.ReactElement {
       window.history.replaceState(null, "", url.toString());
     }
   }, [allTrades]);
-  const prevFilters = useRef({ fOutcome, fSide, fWeekday, fContext, fSmt, from, to, q });
+  const prevFilters = useRef({ fOutcome, fSide, fWeekday, fContext, fSmt, fSetup, from, to, q });
   useEffect(() => {
     const prev = prevFilters.current;
     const changed =
       prev.fOutcome !== fOutcome || prev.fSide !== fSide ||
       prev.fWeekday !== fWeekday || prev.fContext !== fContext || prev.fSmt !== fSmt ||
+      prev.fSetup !== fSetup ||
       prev.from !== from || prev.to !== to || prev.q !== q;
-    prevFilters.current = { fOutcome, fSide, fWeekday, fContext, fSmt, from, to, q };
+    prevFilters.current = { fOutcome, fSide, fWeekday, fContext, fSmt, fSetup, from, to, q };
     if (changed) setPage(1);
-  }, [fOutcome, fSide, fWeekday, fContext, from, to, q]);
+  }, [fOutcome, fSide, fWeekday, fContext, fSmt, fSetup, from, to, q]);
 
   const filtered = useMemo(() => {
     const ql = q.trim().toLowerCase();
@@ -1340,13 +1346,15 @@ function HistoryPageInner(): React.ReactElement {
       if (fSmt === "smt_structural" && !(t as any).smtStructural) return false;
       if (fSmt === "smt_entry" && !(t as any).smtEntry) return false;
       if (fSmt === "smt_both" && (!(t as any).smtStructural || !(t as any).smtEntry)) return false;
+      if (fSetup === "A" && t.setupTag !== "A") return false;
+      if (fSetup === "B" && t.setupTag !== "B") return false;
       if (ql) {
         const blob = [t.note || "", t.instrument || "", t.setupTag || "", t.tradeSide || ""].join(" ").toLowerCase();
         if (!blob.includes(ql)) return false;
       }
       return true;
     }).sort((a, b) => b.createdAt - a.createdAt);
-  }, [allTrades, fOutcome, fSide, fWeekday, fContext, fSmt, from, to, q]);
+  }, [allTrades, fOutcome, fSide, fWeekday, fContext, fSmt, fSetup, from, to, q]);
 
   const kpis = useMemo(() => computeKPIs(filtered), [filtered]);
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -1360,6 +1368,7 @@ function HistoryPageInner(): React.ReactElement {
     if (fWeekday !== "ALL") params.set("day", fWeekday);
     if (fContext !== "all") params.set("ctx", fContext);
     if (fSmt !== "all") params.set("smt", fSmt);
+    if (fSetup !== "all") params.set("setup", fSetup);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
     if (q) params.set("q", q);
@@ -1569,6 +1578,13 @@ function HistoryPageInner(): React.ReactElement {
             <button onClick={() => setFSmt("smt_structural")} style={pill(fSmt === "smt_structural", "amber")}>Estructural</button>
             <button onClick={() => setFSmt("smt_entry")} style={pill(fSmt === "smt_entry", "amber")}>Entry</button>
             <button onClick={() => setFSmt("smt_both")} style={pill(fSmt === "smt_both", "green")}>Ambos</button>
+          </div>
+          {/* Filtro Setup */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(180,140,80,0.08)" }}>
+            <span style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.25)", letterSpacing: "0.12em", alignSelf: "center" }}>SETUP</span>
+            <button onClick={() => setFSetup("all")} style={pill(fSetup === "all")}>Todos</button>
+            <button onClick={() => setFSetup("A")} style={pill(fSetup === "A", "sky")}>Setup A</button>
+            <button onClick={() => setFSetup("B")} style={pill(fSetup === "B", "violet")}>Setup B</button>
           </div>
         </div>
 
