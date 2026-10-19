@@ -154,6 +154,14 @@ function Tag({ children, color = "rgba(232,224,208,0.35)", bg = "rgba(255,255,25
   );
 }
 
+function formatDMY(ms: number): string {
+  const d = new Date(ms);
+  const day  = String(d.getDate()).padStart(2, "0");
+  const mon  = String(d.getMonth() + 1).padStart(2, "0");
+  const year = d.getFullYear();
+  return `${day}-${mon}-${year}`;
+}
+
 // ─── Weekly Summary ────────────────────────────────
 function WeeklySummary({ trades }: { trades: TradeEntry[] }): React.ReactElement {
   // Agrupar trades por semana ISO
@@ -1459,7 +1467,7 @@ function HistoryPageInner(): React.ReactElement {
   async function handleDelete(e: React.MouseEvent, t: TradeEntry) {
     e.stopPropagation();
     if (!userId) return;
-    if (!window.confirm(`¿Borrar?\n${formatYMD(t.createdAt)} · ${t.instrument} · ${t.tradeSide}`)) return;
+    if (!window.confirm(`¿Borrar?\n${formatDMY(t.createdAt)} · ${t.instrument} · ${t.tradeSide}`)) return;
     try {
       await deleteTrade(userId, t.id);
       setAllTrades(prev => { const next = prev.filter(x => x.id !== t.id); localStorage.setItem(LS_KEY, JSON.stringify(next)); return next; });
@@ -1596,12 +1604,12 @@ function HistoryPageInner(): React.ReactElement {
                 <div style={{ padding: "32px 0", textAlign: "center", color: "rgba(232,224,208,0.3)", fontSize: 13 }}>No hay trades con esos filtros.</div>
               ) : pageItems.map((t, idx) => {
                 const ok = outcomeKey(t);
-                const gi = (pageSafe - 1) * pageSize + idx + 1;
+                const gi = filtered.length - ((pageSafe - 1) * pageSize + idx);
                 return (
                   <div key={t.id} onClick={() => router.push(backUrl(t.id))}
                     style={{ position: "relative", padding: "14px 16px", borderRadius: 14, cursor: "pointer", border: `1px solid ${obdr(ok)}`, background: ob(ok) }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                      <span style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.35)" }}>#{gi} · {formatYMD(t.createdAt)} · {t.tradeTime || "—"}</span>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: "rgba(232,224,208,0.35)" }}>#{gi} · {formatDMY(t.createdAt)} · {t.tradeTime || "—"}</span>
                       <span style={{ fontSize: 13, fontWeight: 900, color: oc(ok) }}>{ok === "win" ? "✅" : ok === "loss" ? "❌" : ok === "be" ? "◻︎" : "—"}</span>
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -1634,7 +1642,7 @@ function HistoryPageInner(): React.ReactElement {
                     <tr><td colSpan={12} style={{ padding: "32px 0", textAlign: "center", color: "rgba(232,224,208,0.3)", fontSize: 13 }}>No hay trades con esos filtros.</td></tr>
                   ) : pageItems.map((t, idx) => {
                     const ok = outcomeKey(t);
-                    const gi = (pageSafe - 1) * pageSize + idx + 1;
+                    const gi = filtered.length - ((pageSafe - 1) * pageSize + idx);
                     return (
                       <tr key={t.id} onClick={() => router.push(backUrl(t.id))}
                         style={{ borderBottom: "1px solid rgba(180,140,80,0.07)", cursor: "pointer", transition: "background 0.1s" }}
@@ -1643,7 +1651,7 @@ function HistoryPageInner(): React.ReactElement {
                         <td style={{ padding: "12px 12px 12px 0", fontSize: 12 }}>
                           <Link href={backUrl(t.id)} onClick={e => e.stopPropagation()} style={{ color: "rgba(200,146,58,0.6)", fontWeight: 800, textDecoration: "none" }}>{gi}</Link>
                         </td>
-                        <td style={{ padding: "12px 12px 12px 0", fontSize: 12, color: "rgba(232,224,208,0.6)", whiteSpace: "nowrap" }}>{formatYMD(t.createdAt)}</td>
+                        <td style={{ padding: "12px 12px 12px 0", fontSize: 12, color: "rgba(232,224,208,0.6)", whiteSpace: "nowrap" }}>{formatDMY(t.createdAt)}</td>
                         <td style={{ padding: "12px 12px 12px 0", fontSize: 12, color: "rgba(232,224,208,0.4)" }}>{weekdayLabel(t.createdAt)}</td>
                         <td style={{ padding: "12px 12px 12px 0", fontSize: 12, color: "rgba(232,224,208,0.5)" }}>{t.tradeTime || "—"}</td>
                         <td style={{ padding: "12px 12px 12px 0", fontSize: 12, fontWeight: 800, color: "rgba(232,224,208,0.7)" }}>{t.instrument}</td>
